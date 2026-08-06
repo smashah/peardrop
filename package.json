@@ -1,0 +1,25 @@
+{
+  "name": "@peardrop/public-monorepo",
+  "private": true,
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "check-types": "turbo run check-types",
+    "test": "turbo run test",
+    "check": "turbo run check-types",
+    "boundary:check": "node scripts/check-public-boundary.mjs",
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "release:check": "bumpy ci check",
+    "release:status": "bumpy status"
+  },
+  "devDependencies": {
+    "@varlock/bumpy": "1.18.1",
+    "turbo": "catalog:",
+    "typescript": "catalog:"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.20.0",
+  "namespace": "@peardrop"
+}

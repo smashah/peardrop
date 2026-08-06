@@ -1,0 +1,51 @@
+packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  '@parcel/watcher': true
+  esbuild: true
+  lefthook: true
+  msgpackr-extract: true
+  msw: true
+  sharp: true
+  workerd: true
+
+catalog:
+  '@effect/platform-bun': 4.0.0-beta.94
+  '@effect/platform-node': 4.0.0-beta.94
+  '@effect/vitest': 4.0.0-beta.94
+  '@hyperswarm/dht-relay': ^0.4.3
+  '@modelcontextprotocol/sdk': ^1.6.0
+  '@oclif/core': ^4.2.14
+  '@types/node': ^22.13.0
+  '@types/bun': ^1.3.14
+  '@types/react': ^19.0.0
+  '@types/react-dom': ^19.0.0
+  '@types/ws': ^8.5.14
+  '@cloudflare/workers-types': ^5.20260713.1
+  '@vitejs/plugin-react': ^4.3.4
+  '@x402/core': 2.21.0
+  '@x402/evm': 2.21.0
+  '@x402/fetch': 2.21.0
+  '@x402/hono': 2.21.0
+  clsx: ^2.1.1
+  effect: 4.0.0-beta.94
+  alchemy: 2.0.0-beta.61
+  fflate: ^0.8.2
+  hono: ^4.7.2
+  hyperdht: ^6.16.1
+  lucide-react: ^0.475.0
+  oclif: ^4.17.32
+  open: ^10.1.0
+  react: ^19.0.0
+  react-dom: ^19.0.0
+  tailwind-merge: ^3.0.1
+  tailwindcss: ^4.0.6
+  turbo: ^2.4.0
+  typescript: ^5.7.3
+  vite: ^6.1.0
+  vitest: ^4.1.10
+  wrangler: ^3.109.2
+  ws: ^8.18.0
+  zod: ^3.25.76

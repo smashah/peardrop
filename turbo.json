@@ -1,0 +1,22 @@
+{
+  "$schema": "https://v2-9-16.turborepo.dev/schema.json",
+  "ui": "tui",
+  "globalPassThroughEnv": ["NODE_ENV", "ENVIRONMENT", "RELAY_TICKET_SECRET", "RELAY_API_TOKEN", "PAY_RECIPIENT_ADDRESS"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "build/**", ".next/**"]
+    },
+    "lint": {},
+    "check-types": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}
