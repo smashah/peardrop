@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "noEmit": false,
+    "outDir": "dist",
+    "paths": {
+      "@peardrop/core": ["../core/dist/index.d.ts"],
+      "@peardrop/core/node": ["../core/dist/node.d.ts"]
+    },
+    "rootDir": "src"
+  }
+}
