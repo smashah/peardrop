@@ -59,3 +59,5 @@ See `infra/relay/compose.yaml` for the same setup with Docker Compose.
 ## Releases
 
 `@peardrop/core`, the `peardrop` CLI, and the relay image share one version. Bumpy prepares the version PR; merging it publishes npm packages and `ghcr.io/smashah/peardrop-relay:<version>` from the same verified commit.
+
+Before the first npm release, authorize this repository as the trusted publisher for both npm packages. See [docs/RELEASING.md](./docs/RELEASING.md).

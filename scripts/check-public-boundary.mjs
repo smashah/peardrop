@@ -12,6 +12,7 @@ const allowedTopLevel = new Set([
   "LICENSE",
   "README.md",
   "apps",
+  "docs",
   "infra",
   "package.json",
   "packages",
@@ -34,15 +35,16 @@ const forbiddenText = [
 const scannedExtensions = new Set([".cjs", ".js", ".json", ".mjs", ".ts", ".yaml", ".yml"]);
 
 const entries = await readdir(root, { withFileTypes: true });
+const ignoredGeneratedPaths = new Set([".artifacts", ".git", ".turbo", "node_modules"]);
 const unexpected = entries
   .map((entry) => entry.name)
-  .filter((name) => name !== ".git" && name !== "node_modules" && !allowedTopLevel.has(name));
+  .filter((name) => !ignoredGeneratedPaths.has(name) && !allowedTopLevel.has(name));
 
 const violations = unexpected.map((name) => `unexpected top-level path: ${name}`);
 
 const scan = async (directory) => {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.name === ".git" || entry.name === "node_modules" || entry.name === "dist") continue;
+    if (ignoredGeneratedPaths.has(entry.name) || entry.name === "dist") continue;
     const path = resolve(directory, entry.name);
     if (
       path === resolve(root, "scripts/check-public-boundary.mjs") ||
