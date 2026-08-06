@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
+  push:
+    branches: [main, agent/*]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run boundary:check
+      - run: pnpm run check-types
+      - run: pnpm run test
+      - run: pnpm run build
+      - run: pnpm run package:smoke
+      - run: docker build -f infra/relay/Dockerfile -t peardrop-relay:ci .

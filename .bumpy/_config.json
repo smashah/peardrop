@@ -1,0 +1,14 @@
+{
+  "baseBranch": "main",
+  "access": "public",
+  "changelog": ["github", { "repo": "smashah/peardrop", "internalAuthors": ["smashah"], "includeCommitLink": true }],
+  "include": ["@peardrop/core", "peardrop", "@peardrop/relay"],
+  "fixed": [["@peardrop/core", "peardrop", "@peardrop/relay"]],
+  "privatePackages": { "version": true, "tag": true },
+  "publish": { "provenance": true },
+  "versionPr": {
+    "branch": "bumpy/version-packages",
+    "title": "Release PearDrop",
+    "preamble": "PearDrop publishes the public core and CLI packages plus the relay image from one verified version."
+  }
+}
