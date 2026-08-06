@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { extname, relative, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const artifacts = resolve(root, ".artifacts");
@@ -25,8 +25,47 @@ if (archives.length !== 2 || archives.some((name) => !name.endsWith(".tgz"))) {
 
 const cliManifest = JSON.parse(await readFile(resolve(root, "packages/cli/package.json"), "utf8"));
 const serializedManifest = JSON.stringify(cliManifest);
-for (const token of ["@peardrop/mcp", "../mcp", "peardrop.fyi.git"]) {
+const forbiddenTokens = [
+  "@peardrop/mcp",
+  "../mcp",
+  "apps/api",
+  "apps/webapp",
+  "credentials.manifest",
+  "ownerAuth",
+  "peardrop.fyi.git",
+];
+for (const token of forbiddenTokens) {
   if (serializedManifest.includes(token)) throw new Error(`CLI manifest contains private token: ${token}`);
 }
+
+const extracted = resolve(artifacts, "extracted");
+await mkdir(extracted, { recursive: true });
+for (const archive of archives) {
+  const destination = resolve(extracted, archive.replace(/\.tgz$/, ""));
+  await mkdir(destination, { recursive: true });
+  const unpacked = spawnSync("tar", ["-xzf", resolve(artifacts, archive), "-C", destination], { encoding: "utf8" });
+  if (unpacked.status !== 0) {
+    process.stderr.write(unpacked.stderr || unpacked.stdout);
+    process.exit(unpacked.status ?? 1);
+  }
+}
+
+const scannedExtensions = new Set([".cjs", ".js", ".json", ".mjs", ".ts"]);
+const scan = async (directory) => {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      await scan(path);
+      continue;
+    }
+    if (!scannedExtensions.has(extname(entry.name))) continue;
+    const contents = await readFile(path, "utf8");
+    for (const token of forbiddenTokens) {
+      if (contents.includes(token)) throw new Error(`${relative(extracted, path)} contains private token: ${token}`);
+    }
+  }
+};
+
+await scan(extracted);
 
 process.stdout.write(`Package smoke check passed: ${archives.join(", ")}\n`);
