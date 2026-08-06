@@ -1,0 +1,12 @@
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: infra/relay/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      WORKER_URL: "${WORKER_URL:-https://peardrop.fyi}"
+      RELAY_TICKET_SECRET: "${RELAY_TICKET_SECRET:?set RELAY_TICKET_SECRET}"
+      RELAY_API_TOKEN: "${RELAY_API_TOKEN:?set RELAY_API_TOKEN}"
