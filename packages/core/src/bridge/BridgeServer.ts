@@ -15,6 +15,51 @@ import { runOnReceiveHook, type OnReceiveHookResult } from "../hooks/onReceive.j
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character] ?? character);
 
+// PearDrop's monochrome identity, restated for the CLI bridge. This page is
+// rendered by Node with no build step, so it can't import the webapp's
+// stylesheet — the token values here must be kept in step with DESIGN.md
+// (peardrop.fyi) by hand. Both drop pages share this block so they can't drift
+// from each other. Near-black on white, square corners, hairline rules; the
+// only non-neutral value is --danger, and it never appears without text.
+const DROP_PAGE_STYLES = `
+    :root {
+      color-scheme: light dark;
+      --surface: #ffffff; --surface-raised: #fafafa; --surface-deep: #f5f5f5; --surface-invert: #171717;
+      --text: #0c0a09; --text-muted: #525252; --text-quiet: #737373; --text-invert: #f5f5f5;
+      --line: #e5e5e5; --line-strong: #d4d4d4; --danger: #b42318;
+      --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --surface: #0a0a0a; --surface-raised: #121212; --surface-deep: #171717; --surface-invert: #fafafa;
+        --text: #fafafa; --text-muted: #a3a3a3; --text-quiet: #8a8a8a; --text-invert: #0a0a0a;
+        --line: #262626; --line-strong: #404040; --danger: #f97066;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 1rem; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--surface); color: var(--text); }
+    .card { width: min(100%, 32rem); padding: 1.75rem; border: 1px solid var(--line); background: var(--surface-raised); }
+    .header { display: flex; align-items: center; gap: .6rem; padding-bottom: 1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--line); }
+    .mark { flex: none; width: .65rem; height: .65rem; background: var(--text); }
+    h1 { margin: 0; font-size: 1.05rem; font-weight: 600; letter-spacing: -.015em; }
+    .muted { margin: .5rem 0 0; color: var(--text-muted); font-size: .85rem; line-height: 1.6; }
+    .mono { color: var(--text); font-family: var(--mono); }
+    .field { margin-top: 1.25rem; }
+    label { display: block; margin-bottom: .35rem; color: var(--text-quiet); font: .7rem var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    input, textarea { width: 100%; padding: .7rem; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); font-family: var(--mono); font-size: .8rem; }
+    input:focus, textarea:focus { border-color: var(--text); outline: 2px solid var(--text); outline-offset: -1px; }
+    .drop { margin-top: 1.25rem; padding: 1.75rem; border: 1px dashed var(--line-strong); color: var(--text-muted); text-align: center; cursor: pointer; transition: border-color .18s ease, background .18s ease; }
+    .drop p { margin: 0; }
+    .drop:hover, .drop.is-active { border-color: var(--text); background: var(--surface-deep); }
+    .error { margin-top: .3rem; min-height: 1rem; color: var(--danger); font-size: .75rem; }
+    button { width: 100%; margin-top: 1.5rem; padding: .8rem; border: 1px solid var(--surface-invert); background: var(--surface-invert); color: var(--text-invert); font: inherit; font-weight: 500; cursor: pointer; transition: opacity .18s ease; }
+    button:hover:not(:disabled) { opacity: .84; }
+    button:disabled { opacity: .48; cursor: not-allowed; }
+    #status { margin-top: 1rem; min-height: 1.25rem; color: var(--text-muted); font: .8rem var(--mono); text-align: center; }
+    #status.is-error { color: var(--danger); }
+    #status.is-done { color: var(--text); font-weight: 500; }
+`;
+
 export interface BridgeSink {
   onStart(kind: "files" | "text", files: ReadonlyArray<{ name: string; bytes: number; sha256: string }>): Promise<void>;
   onChunk(fileIndex: number, offset: number, chunk: Buffer): Promise<void>;
@@ -310,31 +355,29 @@ export class BridgeServer {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PearDrop Local Bridge</title>
   <style>
-    * { box-sizing: border-box; } body { margin: 0; min-height: 100vh; display:grid; place-items:center; padding:1rem; font-family:system-ui,-apple-system,sans-serif; background:#020617; color:#f8fafc; } .card { width:min(100%,32rem); padding:1.5rem; border:1px solid #1e293b; border-radius:.75rem; background:#0f172a; } .drop { border:2px dashed #334155; border-radius:.5rem; padding:2rem; text-align:center; cursor:pointer; } textarea,button { width:100%; margin-top:1rem; padding:.75rem; border-radius:.4rem; } textarea { color:#e2e8f0; background:#020617; border:1px solid #334155; } button { color:#022c22; border:0; background:#34d399; font-weight:700; } .muted { color:#94a3b8; } .mono { font-family:ui-monospace,monospace; color:#6ee7b7; }
+${DROP_PAGE_STYLES}
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="flex items-center space-x-3 mb-4">
-      <div class="w-3 h-3 rounded-full bg-emerald-500"></div>
-      <h1 class="text-xl font-bold text-slate-100">PearDrop Drop Surface</h1>
+    <div class="header">
+      <span class="mark"></span>
+      <h1>PearDrop Drop Surface</h1>
     </div>
     <p class="muted">Target: <span class="mono">${targetLabel}</span></p>
 
     <div id="drop-zone" class="drop">
-      <p class="text-slate-300 font-medium">Drag & drop files here or click to select</p>
-      <input type="file" id="file-input" multiple class="hidden">
+      <p>Drag &amp; drop files here or click to select</p>
+      <input type="file" id="file-input" multiple hidden>
     </div>
 
-    <div class="mb-4">
-      <label class="block text-xs text-slate-400 mb-1">Or Paste Secret / Text</label>
-      <textarea id="text-input" rows="4" class="w-full bg-slate-950 border border-slate-800 rounded-md p-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-emerald-500" placeholder="Paste secret, token, or content..."></textarea>
+    <div class="field">
+      <label for="text-input">Or paste secret / text</label>
+      <textarea id="text-input" rows="4" placeholder="Paste secret, token, or content..."></textarea>
     </div>
 
-    <button id="send-btn" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-semibold rounded-md transition-colors shadow">
-      Send Payload
-    </button>
-    <div id="status" class="mt-4 text-sm font-mono text-center min-h-[20px]"></div>
+    <button id="send-btn">Send Payload</button>
+    <div id="status"></div>
   </div>
 
   <script>
@@ -351,18 +394,18 @@ export class BridgeServer {
       selectedFiles = Array.from(e.target.files);
       status.innerText = selectedFiles.length + ' file(s) selected';
     };
-    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-emerald-500'); };
-    dropZone.ondragleave = () => dropZone.classList.remove('border-emerald-500');
+    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('is-active'); };
+    dropZone.ondragleave = () => dropZone.classList.remove('is-active');
     dropZone.ondrop = (e) => {
       e.preventDefault();
-      dropZone.classList.remove('border-emerald-500');
+      dropZone.classList.remove('is-active');
       selectedFiles = Array.from(e.dataTransfer.files);
       status.innerText = selectedFiles.length + ' file(s) selected';
     };
 
     sendBtn.onclick = async () => {
-      if (!token) { status.className = 'text-red-400'; status.innerText = 'Error: Missing token'; return; }
-      status.className = 'text-emerald-400';
+      if (!token) { status.className = 'is-error'; status.innerText = 'Error: Missing token'; return; }
+      status.className = '';
       status.innerText = 'Preparing upload...';
 
       let files = [];
@@ -382,7 +425,7 @@ export class BridgeServer {
         const sha256 = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
         files.push({ name: 'pasted-secret.txt', bytes: buf.byteLength, sha256, data: Array.from(buf) });
       } else {
-        status.className = 'text-amber-400';
+        status.className = 'is-error';
         status.innerText = 'Please select a file or paste text first.';
         return;
       }
@@ -395,16 +438,15 @@ export class BridgeServer {
         });
         const data = await res.json();
         if (res.ok) {
-          status.className = 'text-emerald-400 font-bold';
+          status.className = 'is-done';
           status.innerText = '✓ Payload delivered! Link is now dead.';
           sendBtn.disabled = true;
-          sendBtn.classList.add('opacity-50');
         } else {
-          status.className = 'text-red-400';
+          status.className = 'is-error';
           status.innerText = 'Error: ' + (data.error || 'Upload failed');
         }
       } catch (err) {
-        status.className = 'text-red-400';
+        status.className = 'is-error';
         status.innerText = 'Network error: ' + err.message;
       }
     };
@@ -484,12 +526,15 @@ export class BridgeServer {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${escapeHtml(clientSpec.title)}</title>
   <style>
-    * { box-sizing: border-box; } body { margin: 0; min-height: 100vh; display:grid; place-items:center; padding:1rem; font-family:system-ui,-apple-system,sans-serif; background:#020617; color:#f8fafc; } .card { width:min(100%,32rem); padding:1.5rem; border:1px solid #1e293b; border-radius:.75rem; background:#0f172a; } label { display:block; font-size:.75rem; color:#94a3b8; margin-bottom:.25rem; } input, textarea { width:100%; padding:.6rem; border-radius:.4rem; color:#e2e8f0; background:#020617; border:1px solid #334155; font-family:ui-monospace,monospace; font-size:.85rem; } .field { margin-top:1rem; } .error { color:#f87171; font-size:.75rem; margin-top:.25rem; min-height:1rem; } button { width:100%; margin-top:1.5rem; padding:.75rem; border-radius:.4rem; color:#022c22; border:0; background:#34d399; font-weight:700; cursor:pointer; } button:disabled { opacity:.5; cursor:not-allowed; } .muted { color:#94a3b8; } .mono { font-family:ui-monospace,monospace; color:#6ee7b7; } #status { margin-top:1rem; font-size:.85rem; text-align:center; min-height:1.25rem; }
+${DROP_PAGE_STYLES}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1 class="text-xl font-bold">${escapeHtml(clientSpec.title)}</h1>
+    <div class="header">
+      <span class="mark"></span>
+      <h1>${escapeHtml(clientSpec.title)}</h1>
+    </div>
     ${clientSpec.description ? `<p class="muted">${escapeHtml(clientSpec.description)}</p>` : ""}
     <p class="muted">Target: <span class="mono">${targetLabel}</span></p>
     <p class="muted">${escapeHtml(clientSpec.copy.request)}</p>
@@ -555,7 +600,7 @@ export class BridgeServer {
     }
 
     sendBtn.onclick = async () => {
-      if (!token) { status.className = 'error'; status.textContent = 'Error: Missing token'; return; }
+      if (!token) { status.className = 'is-error'; status.textContent = 'Error: Missing token'; return; }
       document.querySelectorAll('.error').forEach((el) => (el.textContent = ''));
 
       const values = {};
@@ -584,12 +629,12 @@ export class BridgeServer {
         }
       }
       if (hasClientError) {
-        status.className = 'error';
+        status.className = 'is-error';
         status.textContent = spec.copy.failure;
         return;
       }
 
-      status.className = 'muted';
+      status.className = '';
       status.textContent = 'Sending...';
       try {
         const res = await fetch('/upload?token=' + token, {
@@ -599,22 +644,22 @@ export class BridgeServer {
         });
         const data = await res.json();
         if (res.ok) {
-          status.className = 'mono';
+          status.className = 'is-done';
           status.textContent = spec.copy.success;
           sendBtn.disabled = true;
         } else if (data.errors) {
-          status.className = 'error';
+          status.className = 'is-error';
           status.textContent = spec.copy.failure;
           for (const [name, message] of Object.entries(data.errors)) {
             const el = document.getElementById('error-' + name);
             if (el) el.textContent = message;
           }
         } else {
-          status.className = 'error';
+          status.className = 'is-error';
           status.textContent = data.error || spec.copy.failure;
         }
       } catch (err) {
-        status.className = 'error';
+        status.className = 'is-error';
         status.textContent = 'Network error: ' + err.message;
       }
     };
