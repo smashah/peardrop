@@ -28,6 +28,15 @@ import * as Cause from "effect/Cause";
 const RELAY_USAGE_POLL_MS = 3_000;
 const RELAY_USAGE_POLL_MAX_MS = 30_000;
 
+// process.stdout.write to a pipe is async on POSIX, so an unawaited write can
+// still be sitting in the buffer when the process exits or is killed. Awaiting
+// the callback is what guarantees an agent reading the other end of the pipe
+// actually sees the line.
+const writeStdout = (line: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    process.stdout.write(line.endsWith("\n") ? line : `${line}\n`, (err) => (err ? reject(err) : resolve()));
+  });
+
 const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
   new Promise((resolve) => {
     const done = () => {
@@ -48,7 +57,15 @@ export default class ReceiveCommand extends Command {
     "max-size": Flags.integer({ description: "Maximum payload size in MB" }),
     ttl: Flags.string({ description: "Tunnel TTL (e.g. 30s, 1h, 24h, 7d)", default: "1h" }),
     pin: Flags.boolean({ description: "Require a 6-digit PIN" }),
-    "allow-relay": Flags.boolean({ description: "Allow fallback relay path", default: true, allowNo: true }),
+    // Relay is the default path (peardrop#22): the flag exists to turn it off,
+    // never to turn it on. `--allow-relay` stays as a hidden alias so scripts
+    // written against 1.2.0 — including `--no-allow-relay` — keep working.
+    relay: Flags.boolean({
+      description: "Use the encrypted relay when a direct connection is impossible (on by default; --no-relay for direct-only)",
+      default: true,
+      allowNo: true,
+    }),
+    "allow-relay": Flags.boolean({ description: "Deprecated alias for --relay", hidden: true, allowNo: true }),
     "relay-cap": Flags.integer({ description: "Relay transfer cap in GB", default: 2 }),
     json: Flags.boolean({ description: "Output JSON metadata" }),
     name: Flags.string({ description: "Optional tunnel label" }),
@@ -57,12 +74,24 @@ export default class ReceiveCommand extends Command {
     "on-receive": Flags.string({ description: "Command to run after a successful drop" }),
   };
 
+  /**
+   * Terminal failure that a `--json` consumer can actually read. oclif's own
+   * error rendering is human-shaped prose on stderr, so a piped agent watching
+   * stdout for JSON gets nothing it can parse; emit one JSON line, flushed,
+   * and exit non-zero instead.
+   */
+  private async fail(message: string, json: boolean): Promise<never> {
+    if (!json) this.error(message, { exit: 1 });
+    await writeStdout(JSON.stringify({ mode: "remote", event: "error", error: message }));
+    return this.exit(1);
+  }
+
   public async run(): Promise<void> {
     const { flags } = await this.parse(ReceiveCommand);
 
     const onReceiveCommand = flags["on-receive"];
     if (onReceiveCommand !== undefined && onReceiveCommand.trim().length === 0) {
-      this.error("--on-receive needs a non-empty command.", { exit: 1 });
+      return this.fail("--on-receive needs a non-empty command.", flags.json);
     }
 
     const keySeed = randomBytes(32);
@@ -78,14 +107,17 @@ export default class ReceiveCommand extends Command {
 
     const workerUrl = flags["worker-url"].replace(/\/$/, "");
 
-    // --allow-relay is a policy flag only: it grants permission to fall back to
-    // the relay, and never triggers a wallet load or a payment round-trip here.
-    // Relay is free up to RELAY_FREE_TIER_BYTES, so authorization is deferred
-    // until the Worker reports relayed bytes trending over that threshold.
-    const allowRelay = flags["allow-relay"];
+    // Relay permission is a policy decision only: it never triggers a wallet
+    // load or a payment round-trip here. Relay is free up to
+    // RELAY_FREE_TIER_BYTES, so authorization is deferred until the Worker
+    // reports relayed bytes trending over that threshold.
+    const allowRelay = flags["allow-relay"] ?? flags.relay;
 
     if (flags.detach) {
-      this.error("--detach is unavailable until supervised receiver persistence is implemented; run receive in the foreground.");
+      return this.fail(
+        "--detach is unavailable until supervised receiver persistence is implemented; run receive in the foreground.",
+        flags.json
+      );
     }
 
     let tunnelRes: {
@@ -117,7 +149,7 @@ export default class ReceiveCommand extends Command {
       tunnelRes = await res.json();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.error(`Worker tunnel registration failed: ${message}. No public PearDrop URL was created.`);
+      return this.fail(`Worker tunnel registration failed: ${message}. No public PearDrop URL was created.`, flags.json);
     }
 
     const tunnelState: TunnelSession = {
@@ -127,7 +159,7 @@ export default class ReceiveCommand extends Command {
       pin: pinCode,
       target: flags.target,
       expiresAt: Date.now() + ttlSec * 1000,
-      relayAllowed: tunnelRes.relayAllowed ?? flags["allow-relay"],
+      relayAllowed: tunnelRes.relayAllowed ?? allowRelay,
       ownerToken: tunnelRes.ownerToken,
       workerUrl,
       mode: "remote",
@@ -137,7 +169,9 @@ export default class ReceiveCommand extends Command {
     await runEffect(saveSession(tunnelState));
 
     if (flags.json) {
-      this.log(JSON.stringify(tunnelState, null, 2));
+      // Single-line, compact and flushed so a piped consumer can read one line
+      // and parse the Drop URL immediately, the same way `local --json` does.
+      await writeStdout(JSON.stringify(tunnelState));
     } else {
       this.log("\n=========================================");
       this.log(` PearDrop Receiver Active`);
@@ -280,7 +314,7 @@ export default class ReceiveCommand extends Command {
     // The only point at which a missing wallet is an error: relay was actually
     // used, past the free tier, and nothing can pay for it.
     if (relayAuthorizationFailure) {
-      this.error(relayAuthorizationFailure);
+      return this.fail(relayAuthorizationFailure, flags.json);
     }
   }
 }

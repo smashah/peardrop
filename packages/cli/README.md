@@ -9,7 +9,9 @@ npx @peardrop/cli send https://peardrop.fyi/<slug> ./file.zip
 
 The receiver prints a shareable URL and keeps the private key on the receiving machine. Direct transfers are free, and so are the first 5MB of any relayed transfer; only relay usage past that free tier is metered.
 
-No wallet is needed to run `peardrop receive`. `--allow-relay` (on by default) is a policy flag: it permits the relay fallback but never loads a wallet or contacts the payment facilitator on its own. The wallet is used lazily — only once direct P2P did not carry the transfer and relayed bytes trend over the free 5MB tier. At that point, an unconfigured wallet is reported with an actionable message instead of failing the session up front.
+No wallet and no flags are needed to run `peardrop receive`. Relay is the default path: when a direct connection is impossible, PearDrop relays automatically. Pass `--no-relay` to stay direct-only. Enabling relay never loads a wallet or contacts the payment facilitator on its own — the wallet is used lazily, only once direct P2P did not carry the transfer and relayed bytes trend over the free 5MB tier. At that point, an unconfigured wallet is reported with an actionable message instead of failing the session up front.
+
+`--json` prints one compact JSON line per event on stdout: the session (with the drop URL) once the receiver is live, or `{"mode":"remote","event":"error","error":"…"}` with a non-zero exit if the session cannot start. Every line is flushed as it is written, so a piped agent reads it immediately.
 
 To pay for relay usage above the free tier, configure a local Base wallet:
 
