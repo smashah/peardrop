@@ -4,6 +4,15 @@ import { runEffect } from "@peardrop/core/node";
 import * as Effect from "effect/Effect";
 import open from "open";
 
+// process.stdout.write to a pipe is async on POSIX; awaiting the write
+// callback here guarantees the Drop URL is flushed before any subsequent
+// await (e.g. opening a browser) can stall the event loop and delay it
+// reaching an agent reading the other end of the pipe.
+const writeStdout = (line: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    process.stdout.write(line.endsWith("\n") ? line : `${line}\n`, (err) => (err ? reject(err) : resolve()));
+  });
+
 export default class LocalCommand extends Command {
   static override description = "Drop files/secrets directly to a local target path (Mode 3, no tunnel/network)";
 
@@ -33,16 +42,19 @@ export default class LocalCommand extends Command {
     const { url, port, token } = await bridge.start();
 
     if (flags.json) {
-      this.log(JSON.stringify({ mode: "local", url, port, token, target: flags.target }, null, 2));
+      // Single-line, compact JSON so a piped/agent consumer can read one
+      // line and parse it immediately instead of waiting for a multi-line
+      // pretty-printed block to arrive in full.
+      await writeStdout(JSON.stringify({ mode: "local", event: "listening", url, port, token, target: flags.target, pid: process.pid }));
     } else {
-      this.log("\n=========================================");
-      this.log(` PearDrop Local Mode (Mode 3 - No Tunnel)`);
-      this.log(` Target path: ${flags.target}`);
-      this.log(` Drop URL: ${url}`);
+      await writeStdout("\n=========================================");
+      await writeStdout(` PearDrop Local Mode (Mode 3 - No Tunnel)`);
+      await writeStdout(` Target path: ${flags.target}`);
+      await writeStdout(` Drop URL: ${url}`);
       if (flags.lan) {
-        this.log(` LAN mode active (trusted networks only)`);
+        await writeStdout(` LAN mode active (trusted networks only)`);
       }
-      this.log("=========================================\n");
+      await writeStdout("=========================================\n");
     }
 
     if (!flags.json) {
@@ -50,7 +62,7 @@ export default class LocalCommand extends Command {
         Effect.tryPromise({
           try: () => open(url),
           catch: () => new Error(`Open in browser: ${url}`),
-        }).pipe(Effect.match({ onFailure: (error) => this.log(error.message), onSuccess: () => undefined }))
+        }).pipe(Effect.match({ onFailure: (error) => Effect.promise(() => writeStdout(error.message)), onSuccess: () => undefined }))
       );
     }
 
@@ -63,7 +75,19 @@ export default class LocalCommand extends Command {
         process.off("SIGTERM", onSignal);
       });
     });
-    await runEffect(Effect.raceFirst(bridge.awaitCompletion(), awaitSignal));
+    const outcome = await runEffect(Effect.raceFirst(bridge.awaitCompletion(), awaitSignal));
     await bridge.stop();
+
+    const status = outcome === "signal" ? "cancelled" : outcome;
+    if (flags.json) {
+      await writeStdout(JSON.stringify({ mode: "local", event: "closed", status, target: flags.target, pid: process.pid }));
+    } else {
+      await writeStdout(` Session closed: ${status}`);
+    }
+
+    // Signals are already handled above (the drop server stops cleanly), so
+    // exit 0 with a summary line rather than letting the process fall
+    // through to the default signal-terminated exit code.
+    process.exitCode = 0;
   }
 }
