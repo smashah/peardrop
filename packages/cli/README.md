@@ -70,6 +70,6 @@ message = "Custom error"    # optional — overrides every default validation me
 
 **No spec:** `peardrop local` without `--spec`/`--spec-inline` keeps today's single paste-or-drop-a-file page.
 
-The same spec format is accepted by the MCP `peardrop_create` tool ([`@peardrop/mcp`](https://github.com/smashah/peardrop.fyi), private) for agent-driven sessions.
+The same spec format is accepted by peardrop.fyi's agent-facing tool for programmatic, agent-driven sessions.
 
 See [peardrop.fyi](https://peardrop.fyi) and the [source repository](https://github.com/smashah/peardrop) for the protocol, security model, relay, and full command reference.
