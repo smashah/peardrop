@@ -2,8 +2,8 @@
   "baseBranch": "main",
   "access": "public",
   "changelog": ["github", { "repo": "smashah/peardrop", "internalAuthors": ["smashah"], "includeCommitLink": true }],
-  "include": ["@peardrop/core", "peardrop", "@peardrop/relay"],
-  "fixed": [["@peardrop/core", "peardrop", "@peardrop/relay"]],
+  "include": ["@peardrop/core", "@peardrop/cli", "@peardrop/relay"],
+  "fixed": [["@peardrop/core", "@peardrop/cli", "@peardrop/relay"]],
   "privatePackages": { "version": true, "tag": true },
   "publish": { "provenance": true },
   "versionPr": {

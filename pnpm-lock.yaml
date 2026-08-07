@@ -46,8 +46,6 @@ catalogs:
       specifier: ^3.25.76
       version: 3.25.76
 
-pnpmfileChecksum: sha256-/+525nx3x2NedNHtAze9GPnw7V0wAN4BWdNK7OC3aBk=
-
 importers:
 
   .:

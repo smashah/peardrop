@@ -9,6 +9,7 @@
     "check": "turbo run check-types",
     "boundary:check": "node scripts/check-public-boundary.mjs",
     "package:smoke": "node scripts/package-smoke.mjs",
+    "release:contract": "node scripts/check-release-contract.mjs",
     "release:check": "bumpy ci check",
     "release:status": "bumpy status"
   },

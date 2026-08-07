@@ -93,15 +93,45 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish relay image
+      - name: Build and publish versioned relay image
+        id: relay
         run: |
+          set -euo pipefail
           version=$(node -p "require('./apps/relay/package.json').version")
-          docker build -f infra/relay/Dockerfile -t "ghcr.io/smashah/peardrop-relay:${version}" -t ghcr.io/smashah/peardrop-relay:latest .
-          docker push "ghcr.io/smashah/peardrop-relay:${version}"
-          docker push ghcr.io/smashah/peardrop-relay:latest
+          image=ghcr.io/smashah/peardrop-relay
+          docker build -f infra/relay/Dockerfile -t "$image:$version" .
+          docker push "$image:$version"
+          digest_ref=$(docker inspect --format='{{index .RepoDigests 0}}' "$image:$version")
+          test -n "$digest_ref"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest_ref=$digest_ref" >> "$GITHUB_OUTPUT"
       - name: Use npm with trusted publishing support
         run: npm install --global npm@latest
       - run: pnpm exec bumpy ci release --expect-mode publish
         env:
           BUMPY_GH_TOKEN: ${{ secrets.BUMPY_GH_TOKEN || github.token }}
           GH_TOKEN: ${{ github.token }}
+      - name: Verify npm packages
+        env:
+          VERSION: ${{ steps.relay.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(npm view "@peardrop/core@$VERSION" version)" = "$VERSION"
+          test "$(npm view "@peardrop/cli@$VERSION" version)" = "$VERSION"
+      - name: Verify GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.relay.outputs.version }}
+        run: gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -F -- "$VERSION"
+      - name: Promote verified relay image
+        env:
+          DIGEST_REF: ${{ steps.relay.outputs.digest_ref }}
+          IMAGE: ${{ steps.relay.outputs.image }}
+          VERSION: ${{ steps.relay.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker tag "$IMAGE:$VERSION" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
+          docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:latest" | grep -F -- "${DIGEST_REF#*@}"
+          echo "Relay image: $DIGEST_REF" >> "$GITHUB_STEP_SUMMARY"

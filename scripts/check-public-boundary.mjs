@@ -1,63 +1,58 @@
 import { readdir, readFile } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { relative, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
-const allowedTopLevel = new Set([
-  ".bumpy",
-  ".github",
+const allowedFiles = new Set([
+  ".dockerignore",
   ".gitignore",
   ".npmrc",
   "AGENT_INSTRUCTIONS.md",
   "AGENTS.md",
   "LICENSE",
   "README.md",
-  "apps",
-  "docs",
-  "infra",
+  "docs/RELEASING.md",
+  "infra/relay/Dockerfile",
+  "infra/relay/compose.yaml",
   "package.json",
-  "packages",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
-  "scripts",
-  "skills",
+  "scripts/check-public-boundary.mjs",
+  "scripts/check-release-contract.mjs",
+  "scripts/package-smoke.mjs",
+  "skills/peardrop/SKILL.md",
   "tsconfig.json",
   "turbo.json",
 ]);
+const allowedPrefixes = [".bumpy/", ".github/workflows/", "apps/relay/", "packages/cli/", "packages/core/"];
 const forbiddenText = [
-  "@peardrop/mcp",
-  "../mcp",
-  "apps/api",
-  "apps/webapp",
-  "credentials.manifest",
-  "ownerAuth",
-  "smashstack",
+  "@peardrop/" + "mcp",
+  "../" + "mcp",
+  "apps/" + "api",
+  "apps/" + "webapp",
+  "credentials." + "manifest",
+  "owner" + "Auth",
+  "smash" + "stack",
 ];
-const scannedExtensions = new Set([".cjs", ".js", ".json", ".mjs", ".ts", ".yaml", ".yml"]);
-
-const entries = await readdir(root, { withFileTypes: true });
 const ignoredGeneratedPaths = new Set([".artifacts", ".git", ".turbo", "node_modules"]);
-const unexpected = entries
-  .map((entry) => entry.name)
-  .filter((name) => !ignoredGeneratedPaths.has(name) && !allowedTopLevel.has(name));
-
-const violations = unexpected.map((name) => `unexpected top-level path: ${name}`);
+const violations = [];
 
 const scan = async (directory) => {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (ignoredGeneratedPaths.has(entry.name) || entry.name === "dist") continue;
+    if (ignoredGeneratedPaths.has(entry.name)) continue;
     const path = resolve(directory, entry.name);
-    if (
-      path === resolve(root, "scripts/check-public-boundary.mjs") ||
-      path === resolve(root, "scripts/package-smoke.mjs")
-    ) continue;
     if (entry.isDirectory()) {
       await scan(path);
       continue;
     }
-    if (!scannedExtensions.has(extname(entry.name))) continue;
+    const repositoryPath = relative(root, path);
+    const isAllowed = allowedFiles.has(repositoryPath) || allowedPrefixes.some((prefix) => repositoryPath.startsWith(prefix));
+    if (!isAllowed) {
+      violations.push(`unexpected public path: ${repositoryPath}`);
+      continue;
+    }
     const contents = await readFile(path, "utf8");
     for (const token of forbiddenText) {
-      if (contents.includes(token)) violations.push(`${relative(root, path)} contains ${token}`);
+      if (contents.includes(token)) violations.push(`${repositoryPath} contains ${token}`);
     }
   }
 };

@@ -1,0 +1,12 @@
+*
+!.npmrc
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.json
+!packages/
+!packages/core/
+!packages/core/**
+!apps/
+!apps/relay/
+!apps/relay/**

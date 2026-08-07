@@ -3,8 +3,8 @@
 PearDrop creates short-lived, end-to-end encrypted file and secret drops over HyperDHT Noise connections.
 
 ```bash
-npx peardrop receive --target ./inbox
-npx peardrop send https://peardrop.fyi/<slug> ./file.zip
+npx @peardrop/cli receive --target ./inbox
+npx @peardrop/cli send https://peardrop.fyi/<slug> ./file.zip
 ```
 
 The receiver prints a shareable URL and keeps the private key on the receiving machine. Direct transfers are free; the optional browser relay is metered and is enabled only when its payment facilitator and relay are available.

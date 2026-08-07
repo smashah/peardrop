@@ -1,6 +1,6 @@
 ---
 '@peardrop/core': patch
-'peardrop': patch
+'@peardrop/cli': patch
 '@peardrop/relay': patch
 ---
 

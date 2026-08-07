@@ -26,12 +26,12 @@ if (archives.length !== 2 || archives.some((name) => !name.endsWith(".tgz"))) {
 const cliManifest = JSON.parse(await readFile(resolve(root, "packages/cli/package.json"), "utf8"));
 const serializedManifest = JSON.stringify(cliManifest);
 const forbiddenTokens = [
-  "@peardrop/mcp",
-  "../mcp",
-  "apps/api",
-  "apps/webapp",
-  "credentials.manifest",
-  "ownerAuth",
+  "@peardrop/" + "mcp",
+  "../" + "mcp",
+  "apps/" + "api",
+  "apps/" + "webapp",
+  "credentials." + "manifest",
+  "owner" + "Auth",
   "peardrop.fyi.git",
 ];
 for (const token of forbiddenTokens) {
@@ -68,4 +68,47 @@ const scan = async (directory) => {
 
 await scan(extracted);
 
-process.stdout.write(`Package smoke check passed: ${archives.join(", ")}\n`);
+const installDirectory = resolve(artifacts, "install");
+await mkdir(installDirectory, { recursive: true });
+const initialize = spawnSync("npm", ["init", "--yes"], {
+  cwd: installDirectory,
+  encoding: "utf8",
+});
+if (initialize.status !== 0) {
+  process.stderr.write(initialize.stderr || initialize.stdout);
+  process.exit(initialize.status ?? 1);
+}
+
+const install = spawnSync(
+  "npm",
+  ["install", "--ignore-scripts", ...archives.map((archive) => resolve(artifacts, archive))],
+  { cwd: installDirectory, encoding: "utf8" },
+);
+if (install.status !== 0) {
+  process.stderr.write(install.stderr || install.stdout);
+  process.exit(install.status ?? 1);
+}
+
+const cliHelp = spawnSync(resolve(installDirectory, "node_modules/.bin/peardrop"), ["--help"], {
+  cwd: installDirectory,
+  encoding: "utf8",
+});
+if (cliHelp.status !== 0) {
+  process.stderr.write(cliHelp.stderr || cliHelp.stdout);
+  process.exit(cliHelp.status ?? 1);
+}
+if (!cliHelp.stdout.includes("PearDrop")) {
+  throw new Error("Installed peardrop executable did not render its help output");
+}
+
+const importCore = spawnSync(
+  "node",
+  ["--input-type=module", "--eval", 'await import("@peardrop/core"); await import("@peardrop/core/node");'],
+  { cwd: installDirectory, encoding: "utf8" },
+);
+if (importCore.status !== 0) {
+  process.stderr.write(importCore.stderr || importCore.stdout);
+  process.exit(importCore.status ?? 1);
+}
+
+process.stdout.write(`Package install and smoke check passed: ${archives.join(", ")}\n`);

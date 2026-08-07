@@ -35,8 +35,8 @@ pnpm run package:smoke
 ## CLI
 
 ```bash
-npx peardrop receive --target ./inbox
-npx peardrop send https://peardrop.fyi/<slug> ./file.zip
+npx @peardrop/cli receive --target ./inbox
+npx @peardrop/cli send https://peardrop.fyi/<slug> ./file.zip
 ```
 
 Direct transfers use HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path.
@@ -56,8 +56,10 @@ docker run --rm -p 8080:8080 \
 
 See `infra/relay/compose.yaml` for the same setup with Docker Compose.
 
+Turnkey third-party ticket issuance and CLI relay discovery are tracked in [issue #1](https://github.com/smashah/peardrop/issues/1).
+
 ## Releases
 
-`@peardrop/core`, the `peardrop` CLI, and the relay image share one version. Bumpy prepares the version PR; merging it publishes npm packages and `ghcr.io/smashah/peardrop-relay:<version>` from the same verified commit.
+`@peardrop/core`, `@peardrop/cli`, and the relay image share one version. Bumpy prepares the version PR; merging it publishes npm packages and `ghcr.io/smashah/peardrop-relay:<version>` from the same verified commit.
 
-Before the first npm release, authorize this repository as the trusted publisher for both npm packages. See [docs/RELEASING.md](./docs/RELEASING.md).
+The package names must exist before npm allows trusted-publisher setup, so the first release uses an authenticated bootstrap and later releases use GitHub OIDC. See [docs/RELEASING.md](./docs/RELEASING.md).
