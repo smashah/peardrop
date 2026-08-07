@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Config } from "@oclif/core";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import ReceiveCommand from "../src/commands/receive.js";
 
 const commandsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "commands");
 const source = (command: string) => readFileSync(join(commandsDir, `${command}.ts`), "utf8");
@@ -54,8 +56,58 @@ describe("peardrop CLI", () => {
       expect(text).toContain("/status`");
     });
 
-    it("keeps --allow-relay defaulted on as a policy flag", () => {
-      expect(text).toContain(`"allow-relay": Flags.boolean({ description: "Allow fallback relay path", default: true, allowNo: true })`);
+    it("frames relay as the default path with an opt-out flag (smashah/peardrop#22)", () => {
+      // --no-relay, not --allow-relay: the flag exists to turn relay off.
+      expect(text).toContain("relay: Flags.boolean({");
+      expect(text).toContain("--no-relay for direct-only");
+      // The 1.2.0 spelling still parses so existing scripts keep working.
+      expect(text).toContain(`"allow-relay": Flags.boolean({ description: "Deprecated alias for --relay", hidden: true, allowNo: true })`);
+      expect(text).toContain(`const allowRelay = flags["allow-relay"] ?? flags.relay;`);
+    });
+  });
+
+  describe("receive --json never leaves a consumer with nothing to parse", () => {
+    const runReceive = async (argv: string[]) => {
+      const config = await Config.load(join(dirname(fileURLToPath(import.meta.url)), ".."));
+      return ReceiveCommand.run(argv, config);
+    };
+    const captureStdout = () => {
+      const chunks: string[] = [];
+      vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown, encoding: unknown, callback: unknown) => {
+        chunks.push(String(chunk));
+        const done = typeof encoding === "function" ? encoding : callback;
+        if (typeof done === "function") done();
+        return true;
+      }) as typeof process.stdout.write);
+      return chunks;
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("reports an unreachable Worker as one JSON line on stdout and exits non-zero", async () => {
+      const chunks = captureStdout();
+      // Port 1 is reserved and refuses immediately, so this is the registration
+      // failure path without depending on a live Worker.
+      await expect(runReceive(["--json", "--ttl", "60s", "--worker-url", "http://127.0.0.1:1"])).rejects.toMatchObject({
+        oclif: { exit: 1 },
+      });
+
+      const lines = chunks.join("").split("\n").filter((line) => line.trim().length > 0);
+      expect(lines).toHaveLength(1);
+      const reported = JSON.parse(lines[0]!) as { event: string; error: string };
+      expect(reported.event).toBe("error");
+      expect(reported.error).toContain("Worker tunnel registration failed");
+    });
+
+    it("reports an unusable flag combination as JSON rather than human prose", async () => {
+      const chunks = captureStdout();
+      await expect(runReceive(["--json", "--detach"])).rejects.toMatchObject({ oclif: { exit: 1 } });
+
+      const reported = JSON.parse(chunks.join("").trim()) as { event: string; error: string };
+      expect(reported.event).toBe("error");
+      expect(reported.error).toContain("--detach is unavailable");
     });
   });
 });
