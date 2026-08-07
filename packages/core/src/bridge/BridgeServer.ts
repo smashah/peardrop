@@ -8,6 +8,8 @@ import { DonePayloadSchema, FrameType, PdwpCodec, PdwpFrameParser } from "../pro
 import * as Schema from "effect/Schema";
 import { TransportError } from "../effect/errors.js";
 import { parseMultipartUpload, setSecureFileMode } from "./uploadParser.js";
+import { type DropSpec, isMasked } from "../spec/dropSpec.js";
+import { parseSpecUpload } from "./specUpload.js";
 
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character] ?? character);
@@ -149,6 +151,7 @@ export interface BridgeServerOptions {
   targetPathLabel?: string;
   maxSizeMB?: number;
   expectedFiles?: number;
+  spec?: DropSpec;
 }
 
 export class BridgeServer {
@@ -162,6 +165,7 @@ export class BridgeServer {
   private targetPathLabel: string;
   private maxSizeMB?: number;
   private expectedFiles?: number;
+  private spec?: DropSpec;
 
   constructor(options: BridgeServerOptions) {
     this.token = generateSingleUseToken();
@@ -171,6 +175,7 @@ export class BridgeServer {
     this.targetPathLabel = options.targetPathLabel || "Destination target";
     this.maxSizeMB = options.maxSizeMB;
     this.expectedFiles = options.expectedFiles;
+    this.spec = options.spec;
   }
 
   async start(): Promise<{ url: string; port: number; token: string }> {
@@ -225,12 +230,18 @@ export class BridgeServer {
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
 
     if (req.method === "GET" && (reqUrl.pathname === "/" || reqUrl.pathname === "/index.html")) {
-      this.serveDropPage(res);
+      if (this.spec) {
+        this.serveSpecDropPage(res, this.spec);
+      } else {
+        this.serveDropPage(res);
+      }
       return;
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/upload") {
-      // Validate token
+      // Validate token. The token is only marked used on a *successful* delivery
+      // (see handleUpload/handleSpecUpload) so a validation failure leaves the
+      // form resubmittable rather than burning the single-use link.
       const reqToken = req.headers["x-bridge-token"] || reqUrl.searchParams.get("token");
       if (!reqToken || reqToken !== this.token) {
         res.writeHead(401, { "Content-Type": "application/json" });
@@ -243,8 +254,11 @@ export class BridgeServer {
         return;
       }
 
-      this.tokenUsed = true;
-      this.handleUpload(req, res);
+      if (this.spec) {
+        this.handleSpecUpload(req, res, this.spec);
+      } else {
+        this.handleUpload(req, res);
+      }
       return;
     }
 
@@ -387,12 +401,237 @@ export class BridgeServer {
         if (f.path) setSecureFileMode(f.path);
       }
 
+      this.tokenUsed = true;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, status: "delivered", files: deliveredFiles }));
       Effect.runFork(Deferred.succeed(this.completion, "delivered"));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload processing error";
       await this.sink.onError(err instanceof Error ? err : new Error(message));
+      this.tokenUsed = true;
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: message }));
+      Effect.runFork(Deferred.succeed(this.completion, "failed"));
+    }
+  }
+
+  private serveSpecDropPage(res: ServerResponse, spec: DropSpec): void {
+    const targetLabel = escapeHtml(this.targetPathLabel);
+    const clientSpec = {
+      title: spec.title ?? "PearDrop Drop Surface",
+      description: spec.description ?? "",
+      copy: {
+        request: spec.copy.request ?? "Fill in the fields below and submit.",
+        success: spec.copy.success ?? "Delivered — you can close this tab.",
+        failure: spec.copy.failure ?? "Submission failed — check the errors below and try again.",
+      },
+      fields: spec.fields.map((field) => ({
+        name: field.name,
+        type: field.type,
+        label: field.label ?? field.name,
+        required: field.required,
+        masked: isMasked(field),
+        placeholder: field.placeholder ?? "",
+        minLength: field.minLength ?? null,
+        maxLength: field.maxLength ?? null,
+        format: field.format ?? null,
+        count: field.count ?? 1,
+      })),
+    };
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(clientSpec.title)}</title>
+  <style>
+    * { box-sizing: border-box; } body { margin: 0; min-height: 100vh; display:grid; place-items:center; padding:1rem; font-family:system-ui,-apple-system,sans-serif; background:#020617; color:#f8fafc; } .card { width:min(100%,32rem); padding:1.5rem; border:1px solid #1e293b; border-radius:.75rem; background:#0f172a; } label { display:block; font-size:.75rem; color:#94a3b8; margin-bottom:.25rem; } input, textarea { width:100%; padding:.6rem; border-radius:.4rem; color:#e2e8f0; background:#020617; border:1px solid #334155; font-family:ui-monospace,monospace; font-size:.85rem; } .field { margin-top:1rem; } .error { color:#f87171; font-size:.75rem; margin-top:.25rem; min-height:1rem; } button { width:100%; margin-top:1.5rem; padding:.75rem; border-radius:.4rem; color:#022c22; border:0; background:#34d399; font-weight:700; cursor:pointer; } button:disabled { opacity:.5; cursor:not-allowed; } .muted { color:#94a3b8; } .mono { font-family:ui-monospace,monospace; color:#6ee7b7; } #status { margin-top:1rem; font-size:.85rem; text-align:center; min-height:1.25rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 class="text-xl font-bold">${escapeHtml(clientSpec.title)}</h1>
+    ${clientSpec.description ? `<p class="muted">${escapeHtml(clientSpec.description)}</p>` : ""}
+    <p class="muted">Target: <span class="mono">${targetLabel}</span></p>
+    <p class="muted">${escapeHtml(clientSpec.copy.request)}</p>
+    <form id="drop-form"></form>
+    <button id="send-btn">Send Payload</button>
+    <div id="status"></div>
+  </div>
+  <script id="peardrop-spec" type="application/json">${JSON.stringify(clientSpec)}</script>
+  <script>
+    const spec = JSON.parse(document.getElementById('peardrop-spec').textContent);
+    const token = window.location.hash.substring(1);
+    const form = document.getElementById('drop-form');
+    const sendBtn = document.getElementById('send-btn');
+    const status = document.getElementById('status');
+    const fileSelections = {};
+
+    for (const field of spec.fields) {
+      const wrap = document.createElement('div');
+      wrap.className = 'field';
+      const label = document.createElement('label');
+      label.textContent = field.label + (field.required ? ' *' : '');
+      wrap.appendChild(label);
+
+      let input;
+      if (field.type === 'file') {
+        input = document.createElement('input');
+        input.type = 'file';
+        if (field.count > 1) input.multiple = true;
+        input.onchange = (e) => { fileSelections[field.name] = Array.from(e.target.files); };
+      } else {
+        input = document.createElement('input');
+        input.type = field.masked ? 'password' : 'text';
+        input.placeholder = field.placeholder;
+      }
+      input.id = 'field-' + field.name;
+      wrap.appendChild(input);
+
+      const err = document.createElement('div');
+      err.className = 'error';
+      err.id = 'error-' + field.name;
+      wrap.appendChild(err);
+
+      form.appendChild(wrap);
+    }
+
+    async function sha256Hex(buf) {
+      const hashBuf = await crypto.subtle.digest('SHA-256', buf);
+      return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function validateClientSide(field, textValue, files) {
+      if (field.type === 'file') {
+        if (field.required && files.length === 0) return 'This field is required.';
+        if (files.length > 0 && files.length !== field.count) return 'Expected exactly ' + field.count + ' file(s).';
+        return null;
+      }
+      if (field.required && textValue.trim().length === 0) return 'This field is required.';
+      if (textValue.length === 0) return null;
+      if (field.minLength !== null && textValue.length < field.minLength) return 'Must be at least ' + field.minLength + ' characters.';
+      if (field.maxLength !== null && textValue.length > field.maxLength) return 'Must be at most ' + field.maxLength + ' characters.';
+      if (field.format !== null && !new RegExp(field.format).test(textValue)) return "This value doesn't match the expected format.";
+      return null;
+    }
+
+    sendBtn.onclick = async () => {
+      if (!token) { status.className = 'error'; status.textContent = 'Error: Missing token'; return; }
+      document.querySelectorAll('.error').forEach((el) => (el.textContent = ''));
+
+      const values = {};
+      let hasClientError = false;
+      for (const field of spec.fields) {
+        const el = document.getElementById('field-' + field.name);
+        const files = fileSelections[field.name] || [];
+        const textValue = field.type === 'file' ? '' : el.value;
+        const clientError = validateClientSide(field, textValue, files);
+        if (clientError) {
+          document.getElementById('error-' + field.name).textContent = clientError;
+          hasClientError = true;
+          continue;
+        }
+        if (field.type === 'file') {
+          if (files.length === 0) continue;
+          const encoded = [];
+          for (const file of files) {
+            const buf = await file.arrayBuffer();
+            const sha256 = await sha256Hex(buf);
+            encoded.push({ name: file.name, bytes: file.size, sha256, data: Array.from(new Uint8Array(buf)) });
+          }
+          values[field.name] = { kind: 'file', files: encoded };
+        } else if (textValue.length > 0) {
+          values[field.name] = { kind: 'text', text: textValue };
+        }
+      }
+      if (hasClientError) {
+        status.className = 'error';
+        status.textContent = spec.copy.failure;
+        return;
+      }
+
+      status.className = 'muted';
+      status.textContent = 'Sending...';
+      try {
+        const res = await fetch('/upload?token=' + token, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Bridge-Token': token },
+          body: JSON.stringify({ values }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          status.className = 'mono';
+          status.textContent = spec.copy.success;
+          sendBtn.disabled = true;
+        } else if (data.errors) {
+          status.className = 'error';
+          status.textContent = spec.copy.failure;
+          for (const [name, message] of Object.entries(data.errors)) {
+            const el = document.getElementById('error-' + name);
+            if (el) el.textContent = message;
+          }
+        } else {
+          status.className = 'error';
+          status.textContent = data.error || spec.copy.failure;
+        }
+      } catch (err) {
+        status.className = 'error';
+        status.textContent = 'Network error: ' + err.message;
+      }
+    };
+  </script>
+</body>
+</html>`;
+
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(html);
+  }
+
+  private async handleSpecUpload(req: IncomingMessage, res: ServerResponse, spec: DropSpec): Promise<void> {
+    let result: Awaited<ReturnType<typeof parseSpecUpload>>;
+    try {
+      result = await parseSpecUpload(req, spec, this.maxSizeMB);
+    } catch (err) {
+      // A structural error (e.g. body-size limit) — not a per-field validation
+      // failure, but still recoverable: the token stays live for a retry.
+      const message = err instanceof Error ? err.message : "Upload processing error";
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: message }));
+      return;
+    }
+
+    if (!result.ok) {
+      // Validation failed: re-render with field-level messages, nothing stored,
+      // token stays live so the human/agent can fix and resubmit.
+      res.writeHead(422, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, errors: result.errors }));
+      return;
+    }
+
+    try {
+      await this.sink.onStart(
+        "files",
+        result.files.map((f) => ({ name: f.filename, bytes: f.data.length, sha256: f.sha256 }))
+      );
+      for (let idx = 0; idx < result.files.length; idx++) {
+        const file = result.files[idx]!;
+        await this.sink.onChunk(idx, 0, file.data);
+        await this.sink.onFileEnd(idx, file.sha256);
+      }
+      const deliveredFiles = await this.sink.onDone();
+      for (const f of deliveredFiles) {
+        if (f.path) setSecureFileMode(f.path);
+      }
+
+      this.tokenUsed = true;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, status: "delivered", files: deliveredFiles }));
+      Effect.runFork(Deferred.succeed(this.completion, "delivered"));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Upload processing error";
+      await this.sink.onError(err instanceof Error ? err : new Error(message));
+      this.tokenUsed = true;
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: message }));
       Effect.runFork(Deferred.succeed(this.completion, "failed"));

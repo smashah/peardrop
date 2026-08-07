@@ -1,0 +1,14 @@
+title = "Submit both receipts"
+
+[[fields]]
+name = "receipts"
+type = "file"
+label = "Receipts"
+required = true
+count = 2
+
+[[fields]]
+name = "expense_code"
+type = "text"
+label = "Expense Code"
+required = true

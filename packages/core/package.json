@@ -33,6 +33,7 @@
     "@x402/evm": "catalog:",
     "effect": "catalog:",
     "hyperdht": "catalog:",
+    "smol-toml": "1.7.1",
     "viem": "2.55.10",
     "zod": "catalog:"
   },

@@ -1,0 +1,13 @@
+title = "Rotate the deploy key"
+description = "This replaces the key used by the release pipeline."
+
+[copy]
+request = "Paste the new deploy key below."
+success = "Deploy key rotated — pipeline will pick it up on the next run."
+failure = "Rotation failed — check the value and try again."
+
+[[fields]]
+name = "deploy_key"
+type = "secret"
+label = "Deploy Key"
+required = true

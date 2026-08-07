@@ -1,0 +1,13 @@
+title = "Attach evidence"
+
+[[fields]]
+name = "screenshot"
+type = "file"
+label = "Screenshot"
+required = true
+
+[[fields]]
+name = "caption"
+type = "text"
+label = "Caption"
+required = false

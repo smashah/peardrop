@@ -65,7 +65,7 @@ export async function parseMultipartUpload(
   return parseJsonUpload(req, maxBytes, expectedFiles);
 }
 
-async function readBoundedBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+export async function readBoundedBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {

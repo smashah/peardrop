@@ -145,6 +145,9 @@ importers:
       hyperdht:
         specifier: 'catalog:'
         version: 6.33.0(bare-url@2.4.7)
+      smol-toml:
+        specifier: 1.7.1
+        version: 1.7.1
       viem:
         specifier: 2.55.10
         version: 2.55.10(typescript@5.9.3)(zod@3.25.76)
@@ -1456,6 +1459,10 @@ packages:
 
   signal-promise@1.0.3:
     resolution: {integrity: sha512-WBgv0UnIq2C+Aeh0/n+IRpP6967eIx9WpynTUoiW3isPpfe1zu2LJzyfXdo9Tgef8yR/sGjcMvoUXD7EYdiz+g==}
+
+  smol-toml@1.7.1:
+    resolution: {integrity: sha512-PPlsspAZ4jbMBu5DMFhfUGDQLu/vrL4SyBROVS37x8ynnVmFIs1VPBz1Co8Xks3TvpIaZXmU85y4DrQ+UyVFoQ==}
+    engines: {node: '>= 18'}
 
   sodium-native@4.3.3:
     resolution: {integrity: sha512-OnxSlN3uyY8D0EsLHpmm2HOFmKddQVvEMmsakCrXUzSd8kjjbzL413t4ZNF3n0UxSwNgwTyUvkmZHTfuCeiYSw==}
@@ -3204,6 +3211,8 @@ snapshots:
     optional: true
 
   signal-promise@1.0.3: {}
+
+  smol-toml@1.7.1: {}
 
   sodium-native@4.3.3(bare-url@2.4.7):
     dependencies:

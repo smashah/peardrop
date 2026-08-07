@@ -1,0 +1,16 @@
+title = "Provision access"
+
+[[fields]]
+name = "api_key"
+type = "secret"
+label = "API Key"
+required = true
+format = "^sk-[A-Za-z0-9]+$"
+
+[[fields]]
+name = "workspace_slug"
+type = "text"
+label = "Workspace Slug"
+required = true
+minLength = 4
+message = "Workspace slug looks too short — double-check it."
