@@ -4,8 +4,10 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BridgeServer, DiskSink } from "../src/bridge/BridgeServer.js";
+import * as Effect from "effect/Effect";
+import { BridgeServer, DiskSink, type BridgeOnReceiveHook } from "../src/bridge/BridgeServer.js";
 import { DropSpecError, parseDropSpecToml } from "../src/spec/dropSpec.js";
+import type { OnReceiveHookResult } from "../src/hooks/onReceive.js";
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dirname, "fixtures/specs", name), "utf-8");
 
@@ -20,14 +22,32 @@ const fileValue = (files: Array<{ name: string; content: string }>) => ({
   }),
 });
 
+interface ServerContext {
+  submit: (values: Record<string, unknown>) => Promise<{ status: number; body: any }>;
+  directory: string;
+  getPage: () => Promise<string>;
+  /** Resolves once delivery *and* any post-receive hook have finished. */
+  awaitClosed: () => Promise<"delivered" | "failed">;
+  hookResult: () => OnReceiveHookResult | null;
+}
+
 async function withServer(
   specToml: string,
-  run: (ctx: { submit: (values: Record<string, unknown>) => Promise<{ status: number; body: any }>; directory: string; getPage: () => Promise<string> }) => Promise<void>
+  run: (ctx: ServerContext) => Promise<void>,
+  hookOptions?: { onReceive?: (directory: string) => BridgeOnReceiveHook; hookLog?: (chunk: string) => void }
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "peardrop-spec-"));
   try {
     const spec = parseDropSpecToml(specToml);
-    const bridge = new BridgeServer({ sink: new DiskSink(`${directory}/`), targetPathLabel: directory, spec });
+    const onReceive = hookOptions?.onReceive?.(directory)
+      ?? (spec.hooks.on_receive ? { command: spec.hooks.on_receive, targetPath: directory } : undefined);
+    const bridge = new BridgeServer({
+      sink: new DiskSink(`${directory}/`),
+      targetPathLabel: directory,
+      spec,
+      onReceive,
+      hookLog: hookOptions?.hookLog,
+    });
     const { port, token } = await bridge.start();
     try {
       const submit = async (values: Record<string, unknown>) => {
@@ -39,7 +59,8 @@ async function withServer(
         return { status: res.status, body: await res.json() };
       };
       const getPage = async () => (await fetch(`http://127.0.0.1:${port}/`)).text();
-      await run({ submit, directory, getPage });
+      const awaitClosed = () => Effect.runPromise(bridge.awaitCompletion());
+      await run({ submit, directory, getPage, awaitClosed, hookResult: () => bridge.hookResult() });
     } finally {
       await bridge.stop();
     }
@@ -148,6 +169,76 @@ describe("DropSpec — variation matrix (peardrop.fyi#15)", () => {
       expect(cause).toBeInstanceOf(DropSpecError);
       expect((cause as InstanceType<typeof DropSpecError>).message).toContain("Malformed TOML");
     }
+  });
+
+  it("V8: [hooks] on_receive runs after the write lands, with the paths in the environment", async () => {
+    await withServer(fixture("v8-on-receive-hook.toml"), async ({ submit, directory, awaitClosed, hookResult }) => {
+      const ok = await submit({ signing_key: textValue("sk-super-secret-value") });
+      expect(ok.status).toBe(200);
+      expect(await awaitClosed()).toBe("delivered");
+
+      expect(hookResult()).toEqual({ ok: true, exitCode: 0, signal: null });
+
+      const marker = (await readFile(join(directory, "hook-marker.txt"), "utf-8")).trim().split("\n");
+      expect(marker[0]).toBe(directory); // PEARDROP_TARGET_PATH
+      expect(marker[1]).toBe("1"); // PEARDROP_FILE_COUNT
+      expect(marker[2]).toBe(join(directory, "signing_key.txt")); // PEARDROP_FILE_PATHS
+
+      // The delivered secret is untouched by the hook running.
+      await expect(readFile(join(directory, "signing_key.txt"), "utf-8")).resolves.toBe("sk-super-secret-value");
+    });
+  });
+
+  it("V8: the hook process's own command line carries no secret value", async () => {
+    await withServer(fixture("v8-on-receive-hook.toml"), async ({ submit, directory, awaitClosed }) => {
+      expect((await submit({ signing_key: textValue("sk-super-secret-value") })).status).toBe(200);
+      await awaitClosed();
+
+      // `ps -o args= -p $$` inside the hook captures the full argv of the process
+      // PearDrop spawned — the secret must reach it only via the written file.
+      const argv = await readFile(join(directory, "hook-argv.txt"), "utf-8");
+      expect(argv).not.toContain("sk-super-secret-value");
+      expect(argv).toContain("PEARDROP_TARGET_PATH");
+    });
+  });
+
+  it("V8: a non-zero hook exit is reported but leaves the delivered secret in place", async () => {
+    const logged: string[] = [];
+    await withServer(
+      fixture("v1-single-secret.toml"),
+      async ({ submit, directory, awaitClosed, hookResult }) => {
+        const ok = await submit({ api_key: textValue("sk-still-delivered") });
+        expect(ok.status).toBe(200);
+        expect(ok.body.ok).toBe(true);
+        expect(await awaitClosed()).toBe("delivered");
+
+        expect(hookResult()).toMatchObject({ ok: false, exitCode: 3 });
+        expect(logged.join("")).toContain("on_receive hook failed (exit code 3)");
+        // The drop is not a transaction with the hook: the secret stays written.
+        await expect(readFile(join(directory, "api_key.txt"), "utf-8")).resolves.toBe("sk-still-delivered");
+      },
+      { onReceive: (directory) => ({ command: "exit 3", targetPath: directory }), hookLog: (chunk) => logged.push(chunk) }
+    );
+  });
+
+  it("V8: a spec with no [hooks] block runs no hook at all", async () => {
+    const spec = parseDropSpecToml(fixture("v1-single-secret.toml"));
+    expect(spec.hooks).toEqual({});
+
+    await withServer(fixture("v1-single-secret.toml"), async ({ submit, awaitClosed, hookResult }) => {
+      expect((await submit({ api_key: textValue("sk-no-hook") })).status).toBe(200);
+      await awaitClosed();
+      expect(hookResult()).toBeNull();
+    });
+  });
+
+  it("V8: an empty on_receive command is rejected before any server starts", () => {
+    const spec = parseDropSpecToml(fixture("v8-on-receive-hook.toml"));
+    expect(spec.hooks.on_receive).toContain("PEARDROP_TARGET_PATH");
+
+    expect(() => parseDropSpecToml('title = "x"\n\n[hooks]\non_receive = "   "\n\n[[fields]]\nname = "k"\ntype = "secret"\n')).toThrow(
+      DropSpecError
+    );
   });
 
   it("a failed validation leaves the single-use token live for a resubmission", async () => {

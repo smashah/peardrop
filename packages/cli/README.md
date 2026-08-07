@@ -45,6 +45,10 @@ request = "Paste the new deploy key below."
 success = "Deploy key rotated — pipeline will pick it up on the next run."
 failure = "Rotation failed — check the value and try again."
 
+# Post-receive hook (optional) — see "Post-receive hooks" below.
+[hooks]
+on_receive = "./scripts/store-deploy-key.sh"
+
 # One [[fields]] entry per field on the page, rendered in declaration order.
 [[fields]]
 name = "deploy_key"        # required, unique within the spec — also the delivered filename
@@ -71,5 +75,36 @@ message = "Custom error"    # optional — overrides every default validation me
 **No spec:** `peardrop local` without `--spec`/`--spec-inline` keeps today's single paste-or-drop-a-file page.
 
 The same spec format is accepted by peardrop.fyi's agent-facing tool for programmatic, agent-driven sessions.
+
+## Post-receive hooks
+
+A drop can run a command once the payload is confirmed written to disk — for example to load the delivered secret into a Keychain entry and append a ledger row, instead of a caller polling the target path.
+
+```bash
+peardrop local --target ./inbox/ --on-receive ./scripts/store-deploy-key.sh
+peardrop receive --target ./inbox/ --on-receive ./scripts/store-deploy-key.sh
+```
+
+The same command can live in the spec as `[hooks] on_receive`, and `--on-receive` overrides it when both are given. An empty command is rejected before the server starts.
+
+**The hook is told about the drop through the environment, never through argv:**
+
+| Variable | Value |
+| --- | --- |
+| `PEARDROP_TARGET_PATH` | The resolved absolute target path the drop was written to. |
+| `PEARDROP_FILE_PATHS` | Newline-separated absolute paths of the files this drop delivered. |
+| `PEARDROP_FILE_COUNT` | How many files this drop delivered. |
+
+The raw secret value is never passed to the hook at all — not on argv, not in the environment. The hook reads it from the file PearDrop already wrote with mode `0600`, so a secret never becomes visible to `ps` or to any other user's process listing. Delivered filenames are reduced to their basename with control characters stripped, so a sender cannot forge extra `PEARDROP_FILE_PATHS` lines.
+
+The command runs through a shell (so ordinary shell syntax works) with its stdout and stderr forwarded to PearDrop's **stderr**, keeping `--json` output on stdout parseable.
+
+**A hook is a side effect, not part of the delivery.** It runs only after the write is confirmed and the sender has been told the drop landed, so a non-zero exit never un-writes an already-delivered secret. The failure is logged to stderr, and `peardrop local --json` reports it on the closing line:
+
+```json
+{"mode":"local","event":"closed","status":"delivered","target":"./inbox/","pid":123,"hook":{"ok":false,"exitCode":7,"signal":null}}
+```
+
+The session stays open until the hook exits, so a `local --json` consumer that waits for the `closed` line knows the hook has finished.
 
 See [peardrop.fyi](https://peardrop.fyi) and the [source repository](https://github.com/smashah/peardrop) for the protocol, security model, relay, and full command reference.

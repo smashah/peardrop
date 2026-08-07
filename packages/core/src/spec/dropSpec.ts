@@ -36,10 +36,17 @@ export const CopySpecSchema = Schema.Struct({
 });
 export type CopySpec = typeof CopySpecSchema.Type;
 
+/** Side effects run after a drop is confirmed written — never part of the delivery transaction. */
+export const HooksSpecSchema = Schema.Struct({
+  on_receive: Schema.optional(Schema.String),
+});
+export type HooksSpec = typeof HooksSpecSchema.Type;
+
 const RawDropSpecSchema = Schema.Struct({
   title: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
   copy: Schema.optional(CopySpecSchema),
+  hooks: Schema.optional(HooksSpecSchema),
   fields: Schema.NonEmptyArray(RawFieldSpecSchema),
 });
 
@@ -47,6 +54,7 @@ export interface DropSpec {
   readonly title?: string;
   readonly description?: string;
   readonly copy: CopySpec;
+  readonly hooks: HooksSpec;
   readonly fields: ReadonlyArray<FieldSpec>;
 }
 
@@ -83,8 +91,13 @@ export function parseDropSpecToml(tomlText: string): DropSpec {
     title: decoded.title,
     description: decoded.description,
     copy: decoded.copy ?? {},
+    hooks: decoded.hooks ?? {},
     fields: decoded.fields.map(withFieldDefaults),
   };
+
+  if (spec.hooks.on_receive !== undefined && spec.hooks.on_receive.trim().length === 0) {
+    throw new DropSpecError({ message: "hooks.on_receive must be a non-empty command." });
+  }
 
   const seen = new Set<string>();
   for (const field of spec.fields) {

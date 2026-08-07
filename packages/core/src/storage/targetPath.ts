@@ -3,7 +3,10 @@ import { statSync } from "node:fs";
 import * as Effect from "effect/Effect";
 
 export function sanitizeFilename(filename: string): string {
-  const base = basename(filename);
+  // Control characters are stripped as well as directories: a sender-chosen name
+  // containing a newline would otherwise forge entries in the newline-separated
+  // PEARDROP_FILE_PATHS handed to post-receive hooks.
+  const base = basename(filename).replace(/[\x00-\x1f\x7f]/g, "_");
   if (!base || base === "." || base === "..") {
     throw new Error(`Invalid filename: ${filename}`);
   }

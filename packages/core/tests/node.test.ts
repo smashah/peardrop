@@ -112,6 +112,11 @@ describe("@peardrop/core/node", () => {
       expect(() => sanitizeFilename("..")).toThrow();
     });
 
+    it("strips control characters so a sender cannot forge PEARDROP_FILE_PATHS lines", () => {
+      expect(sanitizeFilename("key.txt\nextra.txt")).toBe("key.txt_extra.txt");
+      expect(sanitizeFilename("tab\there.txt")).toBe("tab_here.txt");
+    });
+
     it("resolves single file vs directory target specs", () => {
       const fileTarget = resolveTargetLocation("/tmp/output.p8");
       expect(fileTarget.resolveFilePath("anything.txt")).toBe("/tmp/output.p8");

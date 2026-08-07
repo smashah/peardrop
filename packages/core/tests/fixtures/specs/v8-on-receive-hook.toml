@@ -1,0 +1,12 @@
+title = "Rotate the signing key"
+
+[hooks]
+# Records what the hook actually saw: the env contract, the delivered paths, and
+# the hook process's own command line (which must never carry the secret).
+on_receive = "printf '%s\\n' \"$PEARDROP_TARGET_PATH\" \"$PEARDROP_FILE_COUNT\" \"$PEARDROP_FILE_PATHS\" > \"$PEARDROP_TARGET_PATH/hook-marker.txt\" && ps -o args= -p $$ > \"$PEARDROP_TARGET_PATH/hook-argv.txt\""
+
+[[fields]]
+name = "signing_key"
+type = "secret"
+label = "Signing Key"
+required = true
