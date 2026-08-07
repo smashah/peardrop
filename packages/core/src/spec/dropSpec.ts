@@ -71,15 +71,12 @@ export const DEFAULT_VALIDATION_MESSAGES = {
 
 const isMasked = (field: FieldSpec): boolean => field.masked ?? (field.type === "secret" || field.type === "token");
 
-/** Parses TOML text into a DropSpec, failing clearly (no server started) on malformed input. */
-export function parseDropSpecToml(tomlText: string): DropSpec {
-  let raw: unknown;
-  try {
-    raw = parseToml(tomlText);
-  } catch (cause) {
-    throw new DropSpecError({ message: `Malformed TOML: ${cause instanceof Error ? cause.message : String(cause)}` });
-  }
-
+/**
+ * Validates an already-parsed spec object (TOML table or JSON) into a DropSpec.
+ * `receive --spec` ships the parsed spec to the Worker as JSON, so the Worker
+ * validates with this rather than a second, drifting validator of its own.
+ */
+export function decodeDropSpec(raw: unknown): DropSpec {
   let decoded: typeof RawDropSpecSchema.Type;
   try {
     decoded = Schema.decodeUnknownSync(RawDropSpecSchema)(raw);
@@ -115,6 +112,17 @@ export function parseDropSpecToml(tomlText: string): DropSpec {
   }
 
   return spec;
+}
+
+/** Parses TOML text into a DropSpec, failing clearly (no server started) on malformed input. */
+export function parseDropSpecToml(tomlText: string): DropSpec {
+  let raw: unknown;
+  try {
+    raw = parseToml(tomlText);
+  } catch (cause) {
+    throw new DropSpecError({ message: `Malformed TOML: ${cause instanceof Error ? cause.message : String(cause)}` });
+  }
+  return decodeDropSpec(raw);
 }
 
 /** True when the spec can produce more than one delivered file, which requires a directory target. */

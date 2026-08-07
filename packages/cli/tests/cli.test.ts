@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Config } from "@oclif/core";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import ReceiveCommand from "../src/commands/receive.js";
@@ -66,26 +67,26 @@ describe("peardrop CLI", () => {
     });
   });
 
+  const runReceive = async (argv: string[]) => {
+    const config = await Config.load(join(dirname(fileURLToPath(import.meta.url)), ".."));
+    return ReceiveCommand.run(argv, config);
+  };
+  const captureStdout = () => {
+    const chunks: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown, encoding: unknown, callback: unknown) => {
+      chunks.push(String(chunk));
+      const done = typeof encoding === "function" ? encoding : callback;
+      if (typeof done === "function") done();
+      return true;
+    }) as typeof process.stdout.write);
+    return chunks;
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe("receive --json never leaves a consumer with nothing to parse", () => {
-    const runReceive = async (argv: string[]) => {
-      const config = await Config.load(join(dirname(fileURLToPath(import.meta.url)), ".."));
-      return ReceiveCommand.run(argv, config);
-    };
-    const captureStdout = () => {
-      const chunks: string[] = [];
-      vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown, encoding: unknown, callback: unknown) => {
-        chunks.push(String(chunk));
-        const done = typeof encoding === "function" ? encoding : callback;
-        if (typeof done === "function") done();
-        return true;
-      }) as typeof process.stdout.write);
-      return chunks;
-    };
-
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
     it("reports an unreachable Worker as one JSON line on stdout and exits non-zero", async () => {
       const chunks = captureStdout();
       // Port 1 is reserved and refuses immediately, so this is the registration
@@ -108,6 +109,106 @@ describe("peardrop CLI", () => {
       const reported = JSON.parse(chunks.join("").trim()) as { event: string; error: string };
       expect(reported.event).toBe("error");
       expect(reported.error).toContain("--detach is unavailable");
+    });
+  });
+
+  // smashah/peardrop#26: remote drops were a raw "paste something" box because
+  // only `local` could read a TOML spec. The spec now travels with the tunnel
+  // registration so the Worker-served page can render it.
+  describe("receive --spec", () => {
+    const VALID_SPEC = [
+      'title = "Rotate the deploy key"',
+      'description = "Paste the new key; the old one dies with this link."',
+      "",
+      "[copy]",
+      'request = "Paste the new deploy key below."',
+      "",
+      "[[fields]]",
+      'name = "deploy_key"',
+      'type = "secret"',
+      'label = "Deploy key"',
+      "",
+    ].join("\n");
+
+    /** Captures the registration body, then fails the call so the command stops at registration. */
+    const captureRegistration = () => {
+      const bodies: Array<Record<string, unknown>> = [];
+      const spy = vi.spyOn(globalThis, "fetch").mockImplementation((async (_input: unknown, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        throw new Error("registration intentionally stopped by the test");
+      }) as typeof fetch);
+      return { bodies, spy };
+    };
+
+    it("rejects malformed TOML before any request reaches the Worker", async () => {
+      const { spy } = captureRegistration();
+      const chunks = captureStdout();
+
+      await expect(runReceive(["--json", "--spec-inline", 'title = "unterminated'])).rejects.toMatchObject({
+        oclif: { exit: 1 },
+      });
+
+      expect(spy).not.toHaveBeenCalled();
+      const reported = JSON.parse(chunks.join("").trim()) as { event: string; error: string };
+      expect(reported.event).toBe("error");
+      expect(reported.error).toContain("Malformed TOML");
+    });
+
+    it("rejects a spec whose fields would collide on a single-file target", async () => {
+      const { spy } = captureRegistration();
+      const chunks = captureStdout();
+      const twoFields = `${VALID_SPEC}\n[[fields]]\nname = "account_id"\ntype = "text"\n`;
+
+      await expect(
+        runReceive(["--json", "--spec-inline", twoFields, "--target", "./inbox.txt"])
+      ).rejects.toMatchObject({ oclif: { exit: 1 } });
+
+      expect(spy).not.toHaveBeenCalled();
+      const reported = JSON.parse(chunks.join("").trim()) as { error: string };
+      expect(reported.error).toContain("needs a directory target");
+    });
+
+    it("sends the parsed spec — defaults applied — in the tunnel registration body", async () => {
+      const { bodies } = captureRegistration();
+      captureStdout();
+
+      await expect(runReceive(["--json", "--spec-inline", VALID_SPEC])).rejects.toMatchObject({ oclif: { exit: 1 } });
+
+      expect(bodies).toHaveLength(1);
+      const spec = bodies[0]!.spec as { title: string; copy: Record<string, string>; fields: Array<Record<string, unknown>> };
+      expect(spec.title).toBe("Rotate the deploy key");
+      expect(spec.copy.request).toBe("Paste the new deploy key below.");
+      // `required` is defaulted by the parser, so the Worker and page never have
+      // to re-derive it from an absent key.
+      expect(spec.fields).toEqual([
+        { name: "deploy_key", type: "secret", label: "Deploy key", required: true },
+      ]);
+    });
+
+    it("reads the spec from a file, and a spec-defined hook still feeds --on-receive", async () => {
+      const { bodies } = captureRegistration();
+      captureStdout();
+      const specPath = join(tmpdir(), `peardrop-receive-spec-${process.pid}.toml`);
+      writeFileSync(specPath, `${VALID_SPEC}\n[hooks]\non_receive = "echo delivered"\n`);
+
+      try {
+        await expect(runReceive(["--json", "--spec", specPath])).rejects.toMatchObject({ oclif: { exit: 1 } });
+      } finally {
+        rmSync(specPath, { force: true });
+      }
+
+      const spec = bodies[0]!.spec as { hooks: Record<string, string> };
+      expect(spec.hooks.on_receive).toBe("echo delivered");
+      expect(source("receive")).toContain(`flags["on-receive"] ?? spec?.hooks.on_receive`);
+    });
+
+    it("leaves a no-spec session's registration body exactly as it was", async () => {
+      const { bodies } = captureRegistration();
+      captureStdout();
+
+      await expect(runReceive(["--json"])).rejects.toMatchObject({ oclif: { exit: 1 } });
+
+      expect(bodies[0]).not.toHaveProperty("spec");
     });
   });
 });

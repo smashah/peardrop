@@ -15,7 +15,9 @@ import {
   runOnReceiveHook,
   type TunnelSession,
 } from "@peardrop/core/node";
+import { DropSpecError, parseDropSpecToml, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
@@ -71,7 +73,9 @@ export default class ReceiveCommand extends Command {
     name: Flags.string({ description: "Optional tunnel label" }),
     detach: Flags.boolean({ description: "Run receiver in background" }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
-    "on-receive": Flags.string({ description: "Command to run after a successful drop" }),
+    spec: Flags.string({ description: "Path to a TOML drop-page spec file", exclusive: ["spec-inline"] }),
+    "spec-inline": Flags.string({ description: "Inline TOML drop-page spec", exclusive: ["spec"] }),
+    "on-receive": Flags.string({ description: "Command to run after a successful drop (overrides [hooks] on_receive)" }),
   };
 
   /**
@@ -89,7 +93,25 @@ export default class ReceiveCommand extends Command {
   public async run(): Promise<void> {
     const { flags } = await this.parse(ReceiveCommand);
 
-    const onReceiveCommand = flags["on-receive"];
+    // Malformed/invalid specs fail here, before the Worker is ever asked for a
+    // tunnel — the same fail-fast contract `local` gives before it starts a server.
+    let spec: DropSpec | undefined;
+    try {
+      const specSource = flags["spec-inline"] ?? (flags.spec ? readFileSync(flags.spec, "utf-8") : undefined);
+      if (specSource !== undefined) spec = parseDropSpecToml(specSource);
+    } catch (cause) {
+      const message = cause instanceof DropSpecError ? cause.message : cause instanceof Error ? cause.message : String(cause);
+      return this.fail(message, flags.json);
+    }
+    if (spec && specNeedsDirectoryTarget(spec) && !flags.target.endsWith("/") && !flags.target.endsWith("\\")) {
+      return this.fail(
+        `This spec needs a directory target (multiple fields/files would collide on "${flags.target}") — pass --target with a trailing slash.`,
+        flags.json
+      );
+    }
+
+    // The flag wins over the spec so a caller can override a checked-in spec's hook.
+    const onReceiveCommand = flags["on-receive"] ?? spec?.hooks.on_receive;
     if (onReceiveCommand !== undefined && onReceiveCommand.trim().length === 0) {
       return this.fail("--on-receive needs a non-empty command.", flags.json);
     }
@@ -141,6 +163,9 @@ export default class ReceiveCommand extends Command {
           allowRelay,
           relayCapGB: flags["relay-cap"],
           label: flags.name,
+          // The drop page lives on the Worker in remote mode, so the spec has to
+          // travel with the tunnel registration for the page to render it.
+          spec,
         }),
       });
       if (!res.ok) {
