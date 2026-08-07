@@ -7,16 +7,18 @@ npx @peardrop/cli receive --target ./inbox
 npx @peardrop/cli send https://peardrop.fyi/<slug> ./file.zip
 ```
 
-The receiver prints a shareable URL and keeps the private key on the receiving machine. Direct transfers are free; the optional browser relay is metered and is enabled only when its payment facilitator and relay are available.
+The receiver prints a shareable URL and keeps the private key on the receiving machine. Direct transfers are free, and so are the first 5MB of any relayed transfer; only relay usage past that free tier is metered.
 
-The tunnel creator authorizes the optional paid relay from a local Base wallet:
+No wallet is needed to run `peardrop receive`. `--allow-relay` (on by default) is a policy flag: it permits the relay fallback but never loads a wallet or contacts the payment facilitator on its own. The wallet is used lazily — only once direct P2P did not carry the transfer and relayed bytes trend over the free 5MB tier. At that point, an unconfigured wallet is reported with an actionable message instead of failing the session up front.
+
+To pay for relay usage above the free tier, configure a local Base wallet:
 
 ```bash
 peardrop wallet configure 0xYOUR_PRIVATE_KEY
 peardrop wallet status
 ```
 
-The private key is stored locally with mode `0600` and is redacted from command output. Without a configured wallet—or when production facilitator discovery does not report compatible Base mainnet support—PearDrop stays direct-only.
+The private key is stored locally with mode `0600` and is redacted from command output. When production facilitator discovery does not report compatible Base mainnet support, PearDrop stays direct-only.
 
 ## TOML drop-page specs
 

@@ -5,7 +5,10 @@ import {
   createKeyPair,
   runDhtReceiver,
   runEffect,
-  createRelayAuthorization,
+  authorizeRelayOverage,
+  relayNeedsAuthorization,
+  RELAY_FREE_TIER_BYTES,
+  WalletError,
   saveSession,
   updateSessionStatus,
   resolveTargetLocation,
@@ -16,6 +19,25 @@ import { randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
+
+/**
+ * How often the receiver asks the Worker how many bytes it has relayed. Polling
+ * backs off while nothing is being relayed — a tunnel can idle for its whole TTL
+ * — and snaps back to the fast interval as soon as relay bytes appear.
+ */
+const RELAY_USAGE_POLL_MS = 3_000;
+const RELAY_USAGE_POLL_MAX_MS = 30_000;
+
+const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
 
 export default class ReceiveCommand extends Command {
   static override description = "Start a P2P receiver session to accept files or secrets";
@@ -56,23 +78,11 @@ export default class ReceiveCommand extends Command {
 
     const workerUrl = flags["worker-url"].replace(/\/$/, "");
 
-    let relayAuthorization: unknown;
-    let allowRelay = flags["allow-relay"];
-    if (allowRelay) {
-      const authorization = await runEffect(Effect.exit(createRelayAuthorization(workerUrl, flags["relay-cap"])));
-      if (Exit.isSuccess(authorization)) {
-        relayAuthorization = authorization.value;
-      } else {
-        const error = Cause.squash(authorization.cause);
-        const message = error instanceof Error ? error.message : "Relay authorization failed";
-        if (message.includes("requirements unavailable with HTTP 503")) {
-          allowRelay = false;
-          this.warn("Relay payment is unavailable on this Worker network; creating a direct-only tunnel.");
-        } else {
-          this.error(`Relay authorization could not be created: ${message}. Use --no-allow-relay for direct-only.`);
-        }
-      }
-    }
+    // --allow-relay is a policy flag only: it grants permission to fall back to
+    // the relay, and never triggers a wallet load or a payment round-trip here.
+    // Relay is free up to RELAY_FREE_TIER_BYTES, so authorization is deferred
+    // until the Worker reports relayed bytes trending over that threshold.
+    const allowRelay = flags["allow-relay"];
 
     if (flags.detach) {
       this.error("--detach is unavailable until supervised receiver persistence is implemented; run receive in the foreground.");
@@ -98,7 +108,6 @@ export default class ReceiveCommand extends Command {
           pin: pinCode,
           allowRelay,
           relayCapGB: flags["relay-cap"],
-          relayAuthorization,
           label: flags.name,
         }),
       });
@@ -136,7 +145,10 @@ export default class ReceiveCommand extends Command {
       this.log(` Fingerprint: ${fingerprint}`);
       if (pinCode) this.log(` PIN required: ${pinCode}`);
       this.log(` Target path: ${flags.target}`);
-      this.log(` Relay path: ${tunnelState.relayAllowed ? "Enabled (Max $0.06)" : "Disabled (Direct-only)"}`);
+      const freeTierMB = RELAY_FREE_TIER_BYTES / (1024 * 1024);
+      this.log(
+        ` Relay path: ${tunnelState.relayAllowed ? `Enabled (free up to ${freeTierMB}MB, then metered — max $0.06)` : "Disabled (Direct-only)"}`
+      );
       this.log("=========================================\n");
       this.log("Waiting for sender connection...");
     }
@@ -145,6 +157,73 @@ export default class ReceiveCommand extends Command {
     const onSignal = () => abort.abort();
     process.on("SIGINT", onSignal);
     process.on("SIGTERM", onSignal);
+
+    // Lazy relay authorization. The Worker's own relay accounting is the only
+    // honest signal that direct P2P did not carry the transfer, so poll it and
+    // reach for the wallet exactly once relayed bytes trend over the free tier.
+    // Below that threshold no wallet is loaded and the Worker is never asked
+    // for payment requirements.
+    let relayAuthorizationFailure: string | undefined;
+    const watchRelayOverage = async (): Promise<void> => {
+      if (!tunnelState.relayAllowed || !tunnelState.ownerToken) return;
+      let pollMs = RELAY_USAGE_POLL_MS;
+      while (!abort.signal.aborted && !relayAuthorizationFailure) {
+        await sleep(pollMs, abort.signal);
+        if (abort.signal.aborted) return;
+
+        let relayBytes: number;
+        try {
+          const status = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}/status`, {
+            headers: { Authorization: `Bearer ${tunnelState.ownerToken}` },
+            signal: abort.signal,
+          });
+          if (!status.ok) continue;
+          const body = (await status.json()) as { relayBytes?: number };
+          relayBytes = typeof body.relayBytes === "number" ? body.relayBytes : 0;
+        } catch {
+          continue;
+        }
+        pollMs = relayBytes > 0 ? RELAY_USAGE_POLL_MS : Math.min(pollMs * 2, RELAY_USAGE_POLL_MAX_MS);
+        if (!relayNeedsAuthorization(relayBytes)) continue;
+
+        const authorization = await runEffect(
+          Effect.exit(authorizeRelayOverage({ workerUrl, relayCapGb: flags["relay-cap"], relayBytes }))
+        );
+        if (Exit.isFailure(authorization)) {
+          const error = Cause.squash(authorization.cause);
+          const message = error instanceof Error ? error.message : String(error);
+          if (error instanceof WalletError && error.userActionable) {
+            relayAuthorizationFailure = message;
+            abort.abort();
+          } else {
+            // A Worker- or facilitator-side problem is not something the
+            // operator can fix mid-transfer, so keep receiving and say so.
+            this.warn(`Relay payment authorization is unavailable (${message}); the transfer continues but relay usage may not be billable.`);
+          }
+          return;
+        }
+        if (authorization.value === null) continue;
+
+        // Hand the signed "upto" authorization to the Worker so it can settle
+        // the real byte count. Workers that predate deferred authorization
+        // (peardrop.fyi#20) reject this route — warn rather than interrupt an
+        // in-flight transfer.
+        const submitted = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}/relay-authorization`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${tunnelState.ownerToken}` },
+          body: JSON.stringify({ relayAuthorization: authorization.value, relayCapGB: flags["relay-cap"] }),
+        }).catch(() => undefined);
+        if (!submitted?.ok) {
+          this.warn(
+            `Relay usage passed the free tier but this Worker did not accept the deferred payment authorization (HTTP ${submitted?.status ?? "unreachable"}); the transfer continues but may not be billable.`
+          );
+        } else if (!flags.json) {
+          this.log("Relay usage passed the free tier — payment authorization signed and submitted.");
+        }
+        return;
+      }
+    };
+    void watchRelayOverage().catch(() => undefined);
 
     const sink = new DiskSink(flags.target);
 
@@ -188,9 +267,20 @@ export default class ReceiveCommand extends Command {
         })),
         { signal: abort.signal }
       );
+    } catch (error) {
+      // An abort this command raised itself (relay overage with no wallet) is
+      // reported below with an actionable message, not as a fiber interrupt.
+      if (!relayAuthorizationFailure) throw error;
     } finally {
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
+      abort.abort();
+    }
+
+    // The only point at which a missing wallet is an error: relay was actually
+    // used, past the free tier, and nothing can pay for it.
+    if (relayAuthorizationFailure) {
+      this.error(relayAuthorizationFailure);
     }
   }
 }
