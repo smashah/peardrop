@@ -1,12 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expect as effectExpect, it as effectIt } from "@effect/vitest";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Duplex } from "node:stream";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Deferred from "effect/Deferred";
 import * as Ref from "effect/Ref";
@@ -16,6 +17,8 @@ import { FrameType, PdwpCodec } from "../src/protocol/pdwp.js";
 import { resolveTargetLocation, sanitizeFilename } from "../src/storage/targetPath.js";
 import { signRelayTicketSync, verifyRelayTicketSync } from "../src/tickets/RelayTicket.node.js";
 import { signRelayTicket, verifyRelayTicket } from "../src/tickets/RelayTicket.js";
+import { authorizeRelayOverage, RELAY_OVERAGE_WALLET_MESSAGE, WalletError } from "../src/payments/x402Wallet.node.js";
+import { RELAY_AUTHORIZATION_TRIGGER_BYTES, RELAY_FREE_TIER_BYTES } from "../src/payments/RelayBilling.js";
 
 describe("@peardrop/core/node", () => {
   effectIt.effect("delivers headless DHT bytes only after receiver DONE acknowledgement", () =>
@@ -119,6 +122,82 @@ describe("@peardrop/core/node", () => {
       const dirTarget = resolveTargetLocation("/tmp/inbox/");
       expect(dirTarget.isDir).toBe(true);
       expect(dirTarget.resolveFilePath("key.p8")).toContain("key.p8");
+    });
+  });
+
+  describe("Lazy relay authorization", () => {
+    const originalHome = process.env.HOME;
+    const originalKey = process.env.PEARDROP_WALLET_PRIVATE_KEY;
+    let walletFreeHome: string;
+    let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(async () => {
+      // A home directory with no ~/.peardrop/wallet.json, and no env key:
+      // exactly the state Mohammed's receiver was in when it hard-failed.
+      walletFreeHome = await mkdtemp(join(tmpdir(), "peardrop-nowallet-"));
+      process.env.HOME = walletFreeHome;
+      delete process.env.PEARDROP_WALLET_PRIVATE_KEY;
+      fetchSpy = vi.spyOn(globalThis, "fetch");
+    });
+
+    afterEach(async () => {
+      fetchSpy.mockRestore();
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalKey === undefined) delete process.env.PEARDROP_WALLET_PRIVATE_KEY;
+      else process.env.PEARDROP_WALLET_PRIVATE_KEY = originalKey;
+      await rm(walletFreeHome, { recursive: true, force: true });
+    });
+
+    it("never touches the wallet or the Worker inside the free tier", async () => {
+      for (const relayBytes of [0, 1024, RELAY_AUTHORIZATION_TRIGGER_BYTES - 1]) {
+        const authorization = await Effect.runPromise(
+          authorizeRelayOverage({ workerUrl: "https://peardrop.fyi", relayCapGb: 2, relayBytes })
+        );
+        expect(authorization).toBeNull();
+      }
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("fails with an actionable message only once relay trends past the free tier", async () => {
+      const exit = await Effect.runPromiseExit(
+        authorizeRelayOverage({ workerUrl: "https://peardrop.fyi", relayCapGb: 2, relayBytes: RELAY_FREE_TIER_BYTES + 1 })
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(RELAY_OVERAGE_WALLET_MESSAGE).toContain("peardrop wallet configure");
+      expect(RELAY_OVERAGE_WALLET_MESSAGE).toContain("5MB");
+      expect(String(exit)).toContain("peardrop wallet configure");
+      // The missing wallet is caught before any payment round-trip is made.
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("asks the Worker for payment requirements once a wallet exists and bytes trend over", async () => {
+      await mkdir(join(walletFreeHome, ".peardrop"), { recursive: true });
+      await writeFile(
+        join(walletFreeHome, ".peardrop", "wallet.json"),
+        JSON.stringify({ privateKey: `0x${"11".repeat(32)}` })
+      );
+      fetchSpy.mockResolvedValue(new Response("", { status: 503 }));
+      const exit = await Effect.runPromiseExit(
+        authorizeRelayOverage({ workerUrl: "https://peardrop.fyi", relayCapGb: 2, relayBytes: RELAY_AUTHORIZATION_TRIGGER_BYTES })
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("/api/relay-requirements?relayCapGB=2");
+      // A Worker-side outage is not the operator's to fix, so it is not flagged
+      // actionable and callers can warn instead of killing a live transfer.
+      const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
+      expect(failure).toBeInstanceOf(WalletError);
+      expect((failure as WalletError).userActionable).toBeUndefined();
+    });
+
+    it("flags the missing-wallet failure as operator-actionable", async () => {
+      const exit = await Effect.runPromiseExit(
+        authorizeRelayOverage({ workerUrl: "https://peardrop.fyi", relayCapGb: 2, relayBytes: RELAY_FREE_TIER_BYTES + 1 })
+      );
+      const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
+      expect(failure).toBeInstanceOf(WalletError);
+      expect((failure as WalletError).userActionable).toBe(true);
     });
   });
 

@@ -8,19 +8,55 @@ export interface RelayBillingStrategy {
   calculateMaxCapFee(capGB: number): number;
 }
 
-export function calculateRelayFee(bytes: number): number {
-  if (bytes <= 0) return 0;
-  const fiftyMB = 50 * 1024 * 1024;
-  const fiveHundredMB = 500 * 1024 * 1024;
+/**
+ * Relay pricing tiers, in one place so they are trivial to adjust.
+ *
+ * The free tier boundary is fixed at 5MB. The paid tiers above it are the
+ * pre-existing schedule shifted up past the free tier rather than new numbers,
+ * which keeps the curve monotonic; they remain provisional and are expected to
+ * be re-tuned, so keep them named here instead of inlining them.
+ */
+export const RELAY_FREE_TIER_BYTES = 5 * 1024 * 1024;
+export const RELAY_TIER_1_MAX_BYTES = 50 * 1024 * 1024;
+export const RELAY_TIER_1_USDC = 0.01;
+export const RELAY_TIER_2_MAX_BYTES = 500 * 1024 * 1024;
+export const RELAY_TIER_2_USDC = 0.02;
+export const RELAY_VARIABLE_RATE_USDC_PER_GB = 0.03;
 
-  if (bytes <= fiftyMB) {
-    return 0.01;
+/**
+ * True once a relay transfer is large enough to cost money. This is the only
+ * condition under which a wallet is needed at all — below it, relay is free and
+ * no payment authorization should ever be requested.
+ */
+export function relayRequiresPayment(bytes: number): boolean {
+  return bytes > RELAY_FREE_TIER_BYTES;
+}
+
+/**
+ * Relay bytes at which the payment pre-authorization should be prepared. The
+ * x402 "upto" scheme pre-authorizes a cap and settles the real byte count
+ * afterwards, so the authorization has to exist slightly before the first
+ * billable byte — this fires while a transfer is trending at the free-tier
+ * ceiling rather than after it has already blown through it.
+ */
+export const RELAY_AUTHORIZATION_TRIGGER_BYTES = Math.floor(RELAY_FREE_TIER_BYTES * 0.8);
+
+/** True once relayed bytes are trending over the free tier (see above). */
+export function relayNeedsAuthorization(relayBytes: number): boolean {
+  return relayBytes >= RELAY_AUTHORIZATION_TRIGGER_BYTES;
+}
+
+export function calculateRelayFee(bytes: number): number {
+  if (!relayRequiresPayment(bytes)) return 0;
+
+  if (bytes <= RELAY_TIER_1_MAX_BYTES) {
+    return RELAY_TIER_1_USDC;
   }
-  if (bytes <= fiveHundredMB) {
-    return 0.02;
+  if (bytes <= RELAY_TIER_2_MAX_BYTES) {
+    return RELAY_TIER_2_USDC;
   }
-  const variableRate = (bytes / 1e9) * 0.03;
-  const rawFee = Math.max(0.02, variableRate);
+  const variableRate = (bytes / 1e9) * RELAY_VARIABLE_RATE_USDC_PER_GB;
+  const rawFee = Math.max(RELAY_TIER_2_USDC, variableRate);
   // ceil6: ceil to 6 decimal places (USDC 6 decimals)
   return Math.ceil(rawFee * 1e6) / 1e6;
 }

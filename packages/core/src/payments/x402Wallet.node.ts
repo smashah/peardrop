@@ -10,9 +10,16 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import { RELAY_FREE_TIER_BYTES, relayNeedsAuthorization } from "./RelayBilling.js";
 
 export class WalletError extends Data.TaggedError("WalletError")<{
   readonly message: string;
+  /**
+   * True when the operator can fix this themselves (no wallet configured, bad
+   * key). Worker- and facilitator-side failures are not actionable locally, so
+   * callers can warn about those instead of aborting a live transfer.
+   */
+  readonly userActionable?: boolean;
 }> {}
 
 const WalletFileSchema = Schema.Struct({ privateKey: Schema.NonEmptyString });
@@ -42,14 +49,14 @@ export const walletPath = () => join(walletDirectory(), "wallet.json");
 const validatePrivateKey = (privateKey: string) =>
   /^0x[0-9a-fA-F]{64}$/.test(privateKey)
     ? Effect.succeed(privateKey as `0x${string}`)
-    : Effect.fail(new WalletError({ message: "Wallet private key must be a 32-byte 0x-prefixed hex value" }));
+    : Effect.fail(new WalletError({ message: "Wallet private key must be a 32-byte 0x-prefixed hex value", userActionable: true }));
 
 export const loadWalletPrivateKey = Effect.gen(function* () {
   const environmentKey = yield* Config.string("PEARDROP_WALLET_PRIVATE_KEY").pipe(Config.withDefault(""));
   if (environmentKey) return Redacted.make(yield* validatePrivateKey(environmentKey));
   const file = walletPath();
   if (!existsSync(file)) {
-    return yield* Effect.fail(new WalletError({ message: "No wallet configured; set PEARDROP_WALLET_PRIVATE_KEY or run peardrop wallet configure" }));
+    return yield* Effect.fail(new WalletError({ message: "No wallet configured; set PEARDROP_WALLET_PRIVATE_KEY or run peardrop wallet configure", userActionable: true }));
   }
   const raw = yield* Effect.try({
     try: () => readFileSync(file, "utf8"),
@@ -57,10 +64,10 @@ export const loadWalletPrivateKey = Effect.gen(function* () {
   });
   const json = yield* Effect.try({
     try: () => JSON.parse(raw) as unknown,
-    catch: () => new WalletError({ message: "PearDrop wallet configuration is invalid JSON" }),
+    catch: () => new WalletError({ message: "PearDrop wallet configuration is invalid JSON", userActionable: true }),
   });
   const decoded = yield* Schema.decodeUnknownEffect(WalletFileSchema)(json).pipe(
-    Effect.mapError(() => new WalletError({ message: "PearDrop wallet configuration is invalid" }))
+    Effect.mapError(() => new WalletError({ message: "PearDrop wallet configuration is invalid", userActionable: true }))
   );
   return Redacted.make(yield* validatePrivateKey(decoded.privateKey));
 });
@@ -91,6 +98,18 @@ export const fetchRelayPaymentRequired = (workerUrl: string, relayCapGb: number)
     }),
   });
 
+/** Whether a wallet exists at all, without loading or validating the key. */
+export const walletIsConfigured = Effect.gen(function* () {
+  const environmentKey = yield* Config.string("PEARDROP_WALLET_PRIVATE_KEY").pipe(Config.withDefault(""));
+  return Boolean(environmentKey) || existsSync(walletPath());
+});
+
+const freeTierMB = RELAY_FREE_TIER_BYTES / (1024 * 1024);
+
+export const RELAY_OVERAGE_WALLET_MESSAGE =
+  `Relay transfer would exceed the free ${freeTierMB}MB tier and no wallet is configured — ` +
+  `run \`peardrop wallet configure\` (or set PEARDROP_WALLET_PRIVATE_KEY), or keep the transfer under ${freeTierMB}MB.`;
+
 export const createRelayAuthorization = (workerUrl: string, relayCapGb: number) =>
   Effect.gen(function* () {
     const paymentRequired = yield* fetchRelayPaymentRequired(workerUrl, relayCapGb);
@@ -104,3 +123,28 @@ export const createRelayAuthorization = (workerUrl: string, relayCapGb: number) 
       catch: () => new WalletError({ message: "Could not sign relay payment authorization" }),
     });
   }) as Effect.Effect<PaymentPayload, WalletError>;
+
+export interface RelayOverageAuthorizationOptions {
+  readonly workerUrl: string;
+  readonly relayCapGb: number;
+  /** Bytes the Worker has actually relayed for this tunnel so far. */
+  readonly relayBytes: number;
+}
+
+/**
+ * Lazy relay authorization. Returns `null` — touching neither the wallet nor
+ * the Worker — while a relayed transfer is still inside the free tier, so
+ * `--allow-relay` on its own never costs a round-trip or requires a wallet.
+ * Only once relayed bytes trend over the free tier does this load the wallet,
+ * fetch payment requirements, and sign the "upto" pre-authorization.
+ */
+export const authorizeRelayOverage = (
+  options: RelayOverageAuthorizationOptions
+): Effect.Effect<PaymentPayload | null, WalletError> =>
+  Effect.gen(function* () {
+    if (!relayNeedsAuthorization(options.relayBytes)) return null;
+    if (!(yield* walletIsConfigured)) {
+      return yield* Effect.fail(new WalletError({ message: RELAY_OVERAGE_WALLET_MESSAGE, userActionable: true }));
+    }
+    return yield* createRelayAuthorization(options.workerUrl, options.relayCapGb);
+  }) as Effect.Effect<PaymentPayload | null, WalletError>;

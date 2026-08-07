@@ -1,21 +1,51 @@
 import { describe, expect, it } from "vitest";
 import { expect as effectExpect, it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { calculateRelayFee, calculateMaxCapAuthorization } from "../src/payments/RelayBilling.js";
+import {
+  calculateRelayFee,
+  calculateMaxCapAuthorization,
+  relayRequiresPayment,
+  relayNeedsAuthorization,
+  RELAY_FREE_TIER_BYTES,
+  RELAY_AUTHORIZATION_TRIGGER_BYTES,
+} from "../src/payments/RelayBilling.js";
 import { MAX_PDWP_FRAME_BYTES, PdwpCodec, PdwpFrameParser, FrameType } from "../src/protocol/pdwp.js";
 import { generateSlug, computeOwnerToken, generateFingerprint } from "../src/tunnel/crypto.js";
 import { signRelayTicket, verifyRelayTicket } from "../src/tickets/RelayTicket.js";
 
 describe("@peardrop/core (platform-neutral)", () => {
   describe("RelayBilling pricing schedule", () => {
-    it("calculates exact monotonic pricing per PRD spec", () => {
+    it("keeps everything up to 5MB free", () => {
+      expect(RELAY_FREE_TIER_BYTES).toBe(5 * 1024 * 1024);
       expect(calculateRelayFee(0)).toBe(0);
-      expect(calculateRelayFee(100)).toBe(0.01);
+      expect(calculateRelayFee(100)).toBe(0);
+      expect(calculateRelayFee(RELAY_FREE_TIER_BYTES - 1)).toBe(0);
+      expect(calculateRelayFee(RELAY_FREE_TIER_BYTES)).toBe(0);
+      expect(relayRequiresPayment(RELAY_FREE_TIER_BYTES)).toBe(false);
+      expect(relayRequiresPayment(RELAY_FREE_TIER_BYTES + 1)).toBe(true);
+    });
+
+    it("calculates exact monotonic pricing above the free tier", () => {
+      expect(calculateRelayFee(RELAY_FREE_TIER_BYTES + 1)).toBe(0.01);
       expect(calculateRelayFee(50 * 1024 * 1024)).toBe(0.01);
       expect(calculateRelayFee(50 * 1024 * 1024 + 1)).toBe(0.02);
       expect(calculateRelayFee(500 * 1024 * 1024)).toBe(0.02);
       expect(calculateRelayFee(1.5 * 1e9)).toBe(0.045);
       expect(calculateMaxCapAuthorization(2)).toBe(0.06);
+    });
+
+    it("stays monotonic across the whole curve", () => {
+      const samples = [0, 1, 1024, RELAY_FREE_TIER_BYTES, RELAY_FREE_TIER_BYTES + 1, 10 * 1024 * 1024, 50 * 1024 * 1024, 50 * 1024 * 1024 + 1, 500 * 1024 * 1024, 1e9, 2e9];
+      const fees = samples.map(calculateRelayFee);
+      expect(fees).toEqual([...fees].sort((a, b) => a - b));
+    });
+
+    it("arms the authorization trigger before the first billable byte", () => {
+      expect(RELAY_AUTHORIZATION_TRIGGER_BYTES).toBeLessThan(RELAY_FREE_TIER_BYTES);
+      expect(relayNeedsAuthorization(0)).toBe(false);
+      expect(relayNeedsAuthorization(RELAY_AUTHORIZATION_TRIGGER_BYTES - 1)).toBe(false);
+      expect(relayNeedsAuthorization(RELAY_AUTHORIZATION_TRIGGER_BYTES)).toBe(true);
+      expect(relayNeedsAuthorization(RELAY_FREE_TIER_BYTES + 1)).toBe(true);
     });
   });
 
