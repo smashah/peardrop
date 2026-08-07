@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
 import { BridgeServer, DiskSink, type BridgeOnReceiveHook } from "../src/bridge/BridgeServer.js";
-import { DropSpecError, parseDropSpecToml } from "../src/spec/dropSpec.js";
+import { decodeDropSpec, DropSpecError, parseDropSpecToml } from "../src/spec/dropSpec.js";
 import type { OnReceiveHookResult } from "../src/hooks/onReceive.js";
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dirname, "fixtures/specs", name), "utf-8");
@@ -240,6 +240,33 @@ describe("DropSpec — variation matrix (peardrop.fyi#15)", () => {
     expect(() => parseDropSpecToml('title = "x"\n\n[hooks]\non_receive = "   "\n\n[[fields]]\nname = "k"\ntype = "secret"\n')).toThrow(
       DropSpecError
     );
+  });
+
+  // smashah/peardrop#26: `receive --spec` sends the already-parsed spec to the
+  // Worker as JSON, which validates it with this same decoder rather than a
+  // second one of its own.
+  describe("decodeDropSpec — the JSON path a remote drop page travels", () => {
+    it("round-trips a parsed spec through JSON unchanged", () => {
+      const parsed = parseDropSpecToml(fixture("v5-validation-rules.toml"));
+      expect(decodeDropSpec(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+    });
+
+    it("applies the same defaults to a raw object as the TOML path does", () => {
+      const spec = decodeDropSpec({ fields: [{ name: "api_key", type: "secret" }] });
+      expect(spec.fields[0]!.required).toBe(true);
+      expect(spec.copy).toEqual({});
+      expect(spec.hooks).toEqual({});
+    });
+
+    it("rejects the same invalid specs the TOML path rejects", () => {
+      expect(() => decodeDropSpec({ fields: [] })).toThrow(DropSpecError);
+      expect(() => decodeDropSpec({ fields: [{ name: "k", type: "nonsense" }] })).toThrow(DropSpecError);
+      expect(() =>
+        decodeDropSpec({ fields: [{ name: "k", type: "secret" }, { name: "k", type: "text" }] })
+      ).toThrow(/Duplicate field name/);
+      expect(() => decodeDropSpec({ fields: [{ name: "k", type: "text", format: "([" }] })).toThrow(/Invalid regex/);
+      expect(() => decodeDropSpec("not an object")).toThrow(DropSpecError);
+    });
   });
 
   it("a failed validation leaves the single-use token live for a resubmission", async () => {
