@@ -1,6 +1,23 @@
 # Changelog
 
 
+
+## 1.2.1
+<sub>2026-08-07</sub>
+
+- [#23](https://github.com/smashah/peardrop/pull/23) [`64178a2`](https://github.com/smashah/peardrop/commit/64178a23a3bbe4d397f88236230dc1a355bff0c9)  *(patch)*
+  The bridge drop pages drop the green-on-dark identity for a monochrome one.
+
+  Both inline pages `peardrop local` serves — the Mode 3 local render and the remote-mode spec render — were dark navy with emerald accents. They now share one `DROP_PAGE_STYLES` block restating the webapp's tokens: near-black on white, square corners, hairline rules, no gradient, glow, or shadow, plus a true-neutral `prefers-color-scheme: dark` inversion. Sharing the block is what keeps the two pages consistent, since a Node-rendered page can't import the webapp's stylesheet.
+
+  Both pages also carried Tailwind class names with no Tailwind runtime behind them, so markup like `bg-emerald-500` and the `status.className = 'text-red-400'` assignments styled nothing; status messages now use `is-error` / `is-done` classes that actually exist. The file input was marked `class="hidden"` with no matching rule, which left a stray native file input visible under the drop zone — it now uses the HTML `hidden` attribute.
+- [#25](https://github.com/smashah/peardrop/pull/25) [`fbfd2c3`](https://github.com/smashah/peardrop/commit/fbfd2c3fa6a12d6390a9b21340f9eb1beadafb91)  *(patch)*
+  Relay is named honestly as the default path, and `receive --json` can no longer leave a consumer with nothing to parse.
+
+  `--allow-relay` read as something you opt into even though it defaulted to `true`. It is replaced by `--relay`/`--no-relay`, so the documented surface matches the shipped behaviour: relay is on unless you pass `--no-relay`. `--allow-relay` and `--no-allow-relay` still parse as a hidden alias, so scripts written against 1.2.0 keep working ([#22](https://github.com/smashah/peardrop/issues/22)).
+
+  `receive --json` now emits one compact, flushed JSON line per event on stdout — the session with its drop URL, or `{"mode":"remote","event":"error","error":"…"}` with a non-zero exit when the session cannot start. Previously a failing session printed oclif's human-shaped prose to stderr and nothing parseable to stdout, and the session line itself was pretty-printed and unflushed, so a piped agent could lose it entirely.
+
 ## 1.2.0
 <sub>2026-08-07</sub>
 
