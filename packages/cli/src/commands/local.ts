@@ -72,13 +72,16 @@ export default class LocalCommand extends Command {
         : undefined,
     });
 
-    const { url, port, token } = await bridge.start();
+    const { url, port, token, slug } = await bridge.start();
 
     if (flags.json) {
       // Single-line, compact JSON so a piped/agent consumer can read one
       // line and parse it immediately instead of waiting for a multi-line
       // pretty-printed block to arrive in full.
-      await writeStdout(JSON.stringify({ mode: "local", event: "listening", url, port, token, target: flags.target, pid: process.pid }));
+      // `slug` is the readable name in the URL; `token` is still the secret an
+      // upload has to present. Both are reported so an agent can log the one
+      // and withhold the other.
+      await writeStdout(JSON.stringify({ mode: "local", event: "listening", url, slug, port, token, target: flags.target, pid: process.pid }));
     } else {
       await writeStdout("\n=========================================");
       await writeStdout(` PearDrop Local Mode (Mode 3 - No Tunnel)`);

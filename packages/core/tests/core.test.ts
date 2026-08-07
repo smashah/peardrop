@@ -10,7 +10,8 @@ import {
   RELAY_AUTHORIZATION_TRIGGER_BYTES,
 } from "../src/payments/RelayBilling.js";
 import { MAX_PDWP_FRAME_BYTES, PdwpCodec, PdwpFrameParser, FrameType } from "../src/protocol/pdwp.js";
-import { generateSlug, computeOwnerToken, generateFingerprint } from "../src/tunnel/crypto.js";
+import { computeOwnerToken, generateFingerprint } from "../src/tunnel/crypto.js";
+import { generateSlug } from "../src/tunnel/slug.js";
 import { signRelayTicket, verifyRelayTicket } from "../src/tickets/RelayTicket.js";
 
 describe("@peardrop/core (platform-neutral)", () => {
@@ -80,10 +81,8 @@ describe("@peardrop/core (platform-neutral)", () => {
   });
 
   describe("Tunnel crypto helpers", () => {
-    it("generates 26-char Crockford base32 slugs", () => {
-      const slug = generateSlug();
-      expect(slug).toHaveLength(26);
-      expect(slug).toMatch(/^[0-9a-z]+$/i);
+    it("generates readable word-based slugs (see slug.test.ts for the full contract)", () => {
+      expect(generateSlug()).toMatch(/^[a-z]+-[a-z]+-[0-9a-hjkmnp-tv-z]{3}$/);
     });
 
     it("computes deterministic owner tokens and fingerprints", async () => {
