@@ -48,7 +48,7 @@ async function withServer(
       onReceive,
       hookLog: hookOptions?.hookLog,
     });
-    const { port, token } = await bridge.start();
+    const { port, token, slug } = await bridge.start();
     try {
       const submit = async (values: Record<string, unknown>) => {
         const res = await fetch(`http://127.0.0.1:${port}/upload?token=${token}`, {
@@ -58,7 +58,8 @@ async function withServer(
         });
         return { status: res.status, body: await res.json() };
       };
-      const getPage = async () => (await fetch(`http://127.0.0.1:${port}/`)).text();
+      // The drop page lives on the word-slug path now, not on the root.
+      const getPage = async () => (await fetch(`http://127.0.0.1:${port}/${slug}`)).text();
       const awaitClosed = () => Effect.runPromise(bridge.awaitCompletion());
       await run({ submit, directory, getPage, awaitClosed, hookResult: () => bridge.hookResult() });
     } finally {

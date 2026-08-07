@@ -1,4 +1,4 @@
-const CROCKFORD_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+import { CROCKFORD_ALPHABET } from "./crockford.js";
 
 function randomBytes(length: number): Uint8Array {
   const buf = new Uint8Array(length);
@@ -19,25 +19,6 @@ async function hmacSha256Hex(key: string, message: string): Promise<string> {
   return Array.from(new Uint8Array(sig))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-}
-
-export function generateSlug(bytesLength = 16): string {
-  const buf = randomBytes(bytesLength);
-  let result = "";
-  let value = 0;
-  let bits = 0;
-  for (let i = 0; i < buf.length; i++) {
-    value = (value << 8) | (buf[i] ?? 0);
-    bits += 8;
-    while (bits >= 5) {
-      result += CROCKFORD_ALPHABET[(value >>> (bits - 5)) & 31]!;
-      bits -= 5;
-    }
-  }
-  if (bits > 0) {
-    result += CROCKFORD_ALPHABET[(value << (5 - bits)) & 31]!;
-  }
-  return result.slice(0, 26);
 }
 
 export async function computeOwnerToken(slug: string, pepper: string): Promise<string> {

@@ -3,6 +3,7 @@ import type { Duplex } from "node:stream";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { generateSingleUseToken } from "../tunnel/crypto.js";
+import { generateSlug } from "../tunnel/slug.js";
 import { DiskWriter, type ReceivedFileResult } from "../storage/diskWriter.js";
 import { DonePayloadSchema, FrameType, PdwpCodec, PdwpFrameParser } from "../protocol/pdwp.js";
 import * as Schema from "effect/Schema";
@@ -207,12 +208,39 @@ export interface BridgeServerOptions {
   onReceive?: BridgeOnReceiveHook;
   /** Sink for hook output; defaults to this process's stderr. */
   hookLog?: (chunk: string) => void;
+  /** Display slug for the drop URL. Generated when omitted; never authorizes anything. */
+  slug?: string;
+}
+
+/** Hosts that may appear in a `Host:` header when the drop is bound to loopback. */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * True when `hostHeader` names an IP literal or `localhost`.
+ *
+ * A DNS-rebinding attack needs a *name* it controls to resolve to 127.0.0.1, so
+ * refusing every hostname except `localhost` closes that door while leaving
+ * every way a person actually reaches their own drop (`127.0.0.1:PORT`,
+ * `localhost:PORT`, `[::1]:PORT`) working.
+ */
+function isDirectHostHeader(hostHeader: string | undefined): boolean {
+  if (!hostHeader) return false;
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${hostHeader}`).hostname;
+  } catch {
+    return false;
+  }
+  if (LOOPBACK_HOSTNAMES.has(hostname)) return true;
+  // IPv4 literal, or an IPv6 literal — which WHATWG URL always returns bracketed.
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith("[");
 }
 
 export class BridgeServer {
   private readonly completion = Deferred.makeUnsafe<"delivered" | "failed">();
   private server: Server | null = null;
   private token: string;
+  private readonly slug: string;
   private tokenUsed = false;
   private sink: BridgeSink;
   private host: string;
@@ -226,7 +254,12 @@ export class BridgeServer {
   private lastHookResult: OnReceiveHookResult | null = null;
 
   constructor(options: BridgeServerOptions) {
+    // Two separate things, deliberately: `token` is the 128-bit single-use
+    // secret every upload has to present, `slug` is the readable name the drop
+    // page is served under. Changing the slug format never touches auth — see
+    // the entropy note in tunnel/slug.ts.
     this.token = generateSingleUseToken();
+    this.slug = options.slug ?? generateSlug();
     this.sink = options.sink;
     this.host = options.host || "127.0.0.1";
     this.port = options.port || 0; // 0 = random available port
@@ -258,8 +291,8 @@ export class BridgeServer {
     });
   }
 
-  async start(): Promise<{ url: string; port: number; token: string }> {
-    return Effect.runPromise(Effect.callback<{ url: string; port: number; token: string }, TransportError>((resume) => {
+  async start(): Promise<{ url: string; port: number; token: string; slug: string }> {
+    return Effect.runPromise(Effect.callback<{ url: string; port: number; token: string; slug: string }, TransportError>((resume) => {
       this.server = createServer((req: IncomingMessage, res: ServerResponse) => {
         this.handleRequest(req, res);
       });
@@ -268,8 +301,11 @@ export class BridgeServer {
         const addr = this.server?.address();
         const boundPort = typeof addr === "object" && addr ? addr.port : this.port;
         this.port = boundPort;
-        const url = `http://${this.host}:${boundPort}/#${this.token}`;
-        resume(Effect.succeed({ url, port: boundPort, token: this.token }));
+        // The slug is the whole path — the token no longer rides in the URL at
+        // all, so it can't be shoulder-surfed, logged by a shell, or pasted
+        // into a chat window along with the link.
+        const url = `http://${this.host}:${boundPort}/${this.slug}`;
+        resume(Effect.succeed({ url, port: boundPort, token: this.token, slug: this.slug }));
       });
 
       const onError = (cause: Error) => resume(Effect.fail(new TransportError({ message: cause.message })));
@@ -295,10 +331,11 @@ export class BridgeServer {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    // Enable CORS for loopback
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Bridge-Token");
+    // No `Access-Control-Allow-Origin`: the drop page is same-origin with its
+    // own /upload endpoint, and the page now carries the upload token in its
+    // body. A wildcard here would let any website on the internet read that
+    // token out of a loopback response, which is exactly the auth weakening
+    // the slug change must not introduce.
     res.setHeader("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; img-src 'self' data:");
 
     if (req.method === "OPTIONS") {
@@ -307,9 +344,20 @@ export class BridgeServer {
       return;
     }
 
-    const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+    // Loopback drops only answer to an address, never to an attacker-controlled
+    // name that happens to resolve to 127.0.0.1 (DNS rebinding).
+    const loopbackBound = LOOPBACK_HOSTNAMES.has(this.host) || this.host === "::1";
+    if (loopbackBound && !isDirectHostHeader(req.headers.host)) {
+      res.writeHead(403, { "Content-Type": "text/plain" });
+      res.end("Forbidden");
+      return;
+    }
 
-    if (req.method === "GET" && (reqUrl.pathname === "/" || reqUrl.pathname === "/index.html")) {
+    // Only the path and query matter here, and a request-supplied Host can be
+    // malformed enough to throw, so parse against a fixed base.
+    const reqUrl = new URL(req.url || "/", "http://127.0.0.1");
+
+    if (req.method === "GET" && (reqUrl.pathname === `/${this.slug}` || reqUrl.pathname === `/${this.slug}/`)) {
       if (this.spec) {
         this.serveSpecDropPage(res, this.spec);
       } else {
@@ -380,8 +428,12 @@ ${DROP_PAGE_STYLES}
     <div id="status"></div>
   </div>
 
+  <script id="peardrop-token" type="application/json">${JSON.stringify(this.token)}</script>
   <script>
-    const token = window.location.hash.substring(1);
+    // The URL is the readable slug now, so the upload token is handed to the
+    // page here instead of in the fragment. It is still the only thing the
+    // server accepts on /upload, and it is still single-use.
+    const token = JSON.parse(document.getElementById('peardrop-token').textContent);
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
     const textInput = document.getElementById('text-input');
@@ -454,7 +506,9 @@ ${DROP_PAGE_STYLES}
 </body>
 </html>`;
 
-    res.writeHead(200, { "Content-Type": "text/html" });
+    // The page body carries the single-use upload token, so it must not sit in
+    // a disk cache after the drop is done.
+    res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
     res.end(html);
   }
 
@@ -543,9 +597,12 @@ ${DROP_PAGE_STYLES}
     <div id="status"></div>
   </div>
   <script id="peardrop-spec" type="application/json">${JSON.stringify(clientSpec)}</script>
+  <script id="peardrop-token" type="application/json">${JSON.stringify(this.token)}</script>
   <script>
     const spec = JSON.parse(document.getElementById('peardrop-spec').textContent);
-    const token = window.location.hash.substring(1);
+    // Handed to the page rather than carried in the URL fragment — see the
+    // note on the plain drop page above.
+    const token = JSON.parse(document.getElementById('peardrop-token').textContent);
     const form = document.getElementById('drop-form');
     const sendBtn = document.getElementById('send-btn');
     const status = document.getElementById('status');
@@ -667,7 +724,9 @@ ${DROP_PAGE_STYLES}
 </body>
 </html>`;
 
-    res.writeHead(200, { "Content-Type": "text/html" });
+    // The page body carries the single-use upload token, so it must not sit in
+    // a disk cache after the drop is done.
+    res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
     res.end(html);
   }
 

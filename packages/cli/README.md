@@ -4,8 +4,10 @@ PearDrop creates short-lived, end-to-end encrypted file and secret drops over Hy
 
 ```bash
 npx @peardrop/cli receive --target ./inbox
-npx @peardrop/cli send https://peardrop.fyi/<slug> ./file.zip
+npx @peardrop/cli send https://peardrop.fyi/silent-moss-7f2 ./file.zip
 ```
+
+Drop links are two words and a short code — `silent-moss-7f2` — so they survive being read aloud or typed from a phone. The slug names a drop; it never authorizes one. `peardrop local` serves its page on `http://127.0.0.1:<port>/<slug>` while uploads are still gated on a single-use token the page holds, and remote tunnels are still gated on their owner token.
 
 The receiver prints a shareable URL and keeps the private key on the receiving machine. Direct transfers are free, and so are the first 5MB of any relayed transfer; only relay usage past that free tier is metered.
 
