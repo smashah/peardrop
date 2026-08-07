@@ -2,6 +2,25 @@
 
 
 
+
+## 1.3.0
+<sub>2026-08-07</sub>
+
+- [#27](https://github.com/smashah/peardrop/pull/27) [`c195ed2`](https://github.com/smashah/peardrop/commit/c195ed2d76f4ad639598f47a74ae62be7b2582e2)  *(minor)*
+  Drop links are now readable words — `http://127.0.0.1:61236/jolly-flame-tds` instead of a raw token or a base32 blob.
+
+  `generateSlug()` returns two words and a three-character Crockford base32 code (`silent-moss-7f2`) from one shared corpus in `@peardrop/core`, replacing the 26-character base32 string. Local drops (`peardrop local`, `peardrop send --browser`) serve the drop page on `/<slug>` instead of `/#<token>`, so the single-use upload token no longer travels in the URL where a shell history, a screenshot, or a pasted link would carry it ([#16](https://github.com/smashah/peardrop/issues/16)).
+
+  The slug is a display and routing identifier, never an authorisation: uploads still have to present the 128-bit single-use token, and remote tunnels still turn on the unchanged HMAC owner-token scheme. The page now receives that token in its body, so the bridge drops its wildcard CORS header, marks the page `Cache-Control: no-store`, and — when bound to loopback — refuses requests arriving under a hostname it doesn't recognise, which closes the DNS-rebinding path to a local drop.
+
+  `peardrop local --json` gains a `slug` field alongside `url`. `generateUniqueSlug(isTaken)` is exported for stores that must keep slugs unique: at 2^29 slugs, allocation needs a check-and-retry loop rather than a single draw.
+- [#28](https://github.com/smashah/peardrop/pull/28) [`fed1da9`](https://github.com/smashah/peardrop/commit/fed1da9590b077558240edc844e29392afb42f12)  *(minor)*
+  `receive` takes `--spec`/`--spec-inline`, so a remote drop page can be as self-explanatory as a local one.
+
+  Until now only `local` could read a TOML drop-page spec, which meant every remote drop was a generic "paste something" box with no title, no description and no field labels — the mode most people actually use from a phone ([#26](https://github.com/smashah/peardrop/issues/26)). `receive --spec <file>` and `receive --spec-inline '<toml>'` now parse and validate the spec before the Worker is ever asked for a tunnel, exactly the way `local` validates before it starts a server, and send the parsed spec with the tunnel registration so peardrop.fyi can render the page it describes. A spec's `[hooks] on_receive` is honoured too, with `--on-receive` still overriding it.
+
+  `@peardrop/core` gains `decodeDropSpec`, which validates an already-parsed spec object — the JSON form the Worker receives — against the same schema, defaults and duplicate/regex rules `parseDropSpecToml` applies to TOML text, so both ends judge a spec identically.
+
 ## 1.2.1
 <sub>2026-08-07</sub>
 
