@@ -8,6 +8,8 @@ import {
   createRelayAuthorization,
   saveSession,
   updateSessionStatus,
+  resolveTargetLocation,
+  runOnReceiveHook,
   type TunnelSession,
 } from "@peardrop/core/node";
 import { randomBytes } from "node:crypto";
@@ -30,10 +32,16 @@ export default class ReceiveCommand extends Command {
     name: Flags.string({ description: "Optional tunnel label" }),
     detach: Flags.boolean({ description: "Run receiver in background" }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
+    "on-receive": Flags.string({ description: "Command to run after a successful drop" }),
   };
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(ReceiveCommand);
+
+    const onReceiveCommand = flags["on-receive"];
+    if (onReceiveCommand !== undefined && onReceiveCommand.trim().length === 0) {
+      this.error("--on-receive needs a non-empty command.", { exit: 1 });
+    }
 
     const keySeed = randomBytes(32);
     const keyPair = createKeyPair(keySeed);
@@ -165,6 +173,17 @@ export default class ReceiveCommand extends Command {
             }
             await runEffect(updateSessionStatus(tunnelState.tunnelId, "delivered"));
             if (!flags.json) this.log("Payload delivered successfully.");
+
+            // Side effect only: a failing hook is reported, never rolled back into
+            // the delivery that already completed above.
+            if (onReceiveCommand) {
+              const hook = await runOnReceiveHook({
+                command: onReceiveCommand,
+                targetPath: resolveTargetLocation(flags.target).basePath,
+                files: files as ReadonlyArray<{ name: string; path?: string }>,
+              });
+              if (!flags.json) this.log(`on_receive hook: ${hook.ok ? "ok" : `failed (${hook.error ?? `exit ${hook.exitCode ?? hook.signal}`})`}`);
+            }
           },
         })),
         { signal: abort.signal }

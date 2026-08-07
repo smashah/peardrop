@@ -1,5 +1,5 @@
 import { Command, Flags } from "@oclif/core";
-import { BridgeServer, DiskSink } from "@peardrop/core/node";
+import { BridgeServer, DiskSink, resolveTargetLocation } from "@peardrop/core/node";
 import { runEffect } from "@peardrop/core/node";
 import { DropSpecError, parseDropSpecToml, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
 import * as Effect from "effect/Effect";
@@ -27,6 +27,7 @@ export default class LocalCommand extends Command {
     json: Flags.boolean({ description: "Output JSON result" }),
     spec: Flags.string({ description: "Path to a TOML drop-page spec file", exclusive: ["spec-inline"] }),
     "spec-inline": Flags.string({ description: "Inline TOML drop-page spec", exclusive: ["spec"] }),
+    "on-receive": Flags.string({ description: "Command to run after a successful drop (overrides [hooks] on_receive)" }),
   };
 
   public async run(): Promise<void> {
@@ -50,6 +51,12 @@ export default class LocalCommand extends Command {
       }
     }
 
+    // The flag wins over the spec so a caller can override a checked-in spec's hook.
+    const onReceiveCommand = flags["on-receive"] ?? spec?.hooks.on_receive;
+    if (onReceiveCommand !== undefined && onReceiveCommand.trim().length === 0) {
+      this.error("--on-receive needs a non-empty command.", { exit: 1 });
+    }
+
     const host = flags.lan ? "0.0.0.0" : "127.0.0.1";
     const sink = new DiskSink(flags.target);
 
@@ -60,6 +67,9 @@ export default class LocalCommand extends Command {
       maxSizeMB: flags["max-size"],
       expectedFiles: flags.files,
       spec,
+      onReceive: onReceiveCommand
+        ? { command: onReceiveCommand, targetPath: resolveTargetLocation(flags.target).basePath }
+        : undefined,
     });
 
     const { url, port, token } = await bridge.start();
@@ -102,10 +112,19 @@ export default class LocalCommand extends Command {
     await bridge.stop();
 
     const status = outcome === "signal" ? "cancelled" : outcome;
+    const hook = bridge.hookResult();
     if (flags.json) {
-      await writeStdout(JSON.stringify({ mode: "local", event: "closed", status, target: flags.target, pid: process.pid }));
+      await writeStdout(JSON.stringify({
+        mode: "local",
+        event: "closed",
+        status,
+        target: flags.target,
+        pid: process.pid,
+        ...(hook ? { hook: { ok: hook.ok, exitCode: hook.exitCode, signal: hook.signal, error: hook.error } } : {}),
+      }));
     } else {
       await writeStdout(` Session closed: ${status}`);
+      if (hook) await writeStdout(` on_receive hook: ${hook.ok ? "ok" : `failed (${hook.error ?? `exit ${hook.exitCode ?? hook.signal}`})`}`);
     }
 
     // Signals are already handled above (the drop server stops cleanly), so

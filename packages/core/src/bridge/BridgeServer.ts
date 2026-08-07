@@ -10,6 +10,7 @@ import { TransportError } from "../effect/errors.js";
 import { parseMultipartUpload, setSecureFileMode } from "./uploadParser.js";
 import { type DropSpec, isMasked } from "../spec/dropSpec.js";
 import { parseSpecUpload } from "./specUpload.js";
+import { runOnReceiveHook, type OnReceiveHookResult } from "../hooks/onReceive.js";
 
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character] ?? character);
@@ -144,6 +145,12 @@ export class DiskSink implements BridgeSink {
   }
 }
 
+/** Post-receive hook wiring: the command plus the resolved path it is told about. */
+export interface BridgeOnReceiveHook {
+  readonly command: string;
+  readonly targetPath: string;
+}
+
 export interface BridgeServerOptions {
   host?: string;
   port?: number;
@@ -152,6 +159,9 @@ export interface BridgeServerOptions {
   maxSizeMB?: number;
   expectedFiles?: number;
   spec?: DropSpec;
+  onReceive?: BridgeOnReceiveHook;
+  /** Sink for hook output; defaults to this process's stderr. */
+  hookLog?: (chunk: string) => void;
 }
 
 export class BridgeServer {
@@ -166,6 +176,9 @@ export class BridgeServer {
   private maxSizeMB?: number;
   private expectedFiles?: number;
   private spec?: DropSpec;
+  private onReceive?: BridgeOnReceiveHook;
+  private hookLog?: (chunk: string) => void;
+  private lastHookResult: OnReceiveHookResult | null = null;
 
   constructor(options: BridgeServerOptions) {
     this.token = generateSingleUseToken();
@@ -176,6 +189,28 @@ export class BridgeServer {
     this.maxSizeMB = options.maxSizeMB;
     this.expectedFiles = options.expectedFiles;
     this.spec = options.spec;
+    this.onReceive = options.onReceive;
+    this.hookLog = options.hookLog;
+  }
+
+  /** Result of the post-receive hook, or null when no hook ran. */
+  hookResult(): OnReceiveHookResult | null {
+    return this.lastHookResult;
+  }
+
+  /**
+   * Runs the post-receive hook after the delivery response has already gone out.
+   * A failing hook is logged, never rethrown: the secret is written and the drop
+   * stands regardless of what the side effect does.
+   */
+  private async runReceiveHook(deliveredFiles: ReadonlyArray<DeliveredFile>): Promise<void> {
+    if (!this.onReceive) return;
+    this.lastHookResult = await runOnReceiveHook({
+      command: this.onReceive.command,
+      targetPath: this.onReceive.targetPath,
+      files: deliveredFiles,
+      log: this.hookLog,
+    });
   }
 
   async start(): Promise<{ url: string; port: number; token: string }> {
@@ -404,6 +439,9 @@ export class BridgeServer {
       this.tokenUsed = true;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, status: "delivered", files: deliveredFiles }));
+      // The hook runs after the sender is told the drop landed, but before the
+      // session is reported complete, so the CLI doesn't exit out from under it.
+      await this.runReceiveHook(deliveredFiles);
       Effect.runFork(Deferred.succeed(this.completion, "delivered"));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload processing error";
@@ -627,6 +665,7 @@ export class BridgeServer {
       this.tokenUsed = true;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, status: "delivered", files: deliveredFiles }));
+      await this.runReceiveHook(deliveredFiles);
       Effect.runFork(Deferred.succeed(this.completion, "delivered"));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload processing error";

@@ -3,6 +3,7 @@ export * from "./index.js";
 export * from "./storage/targetPath.js";
 export * from "./storage/diskWriter.js";
 export * from "./bridge/BridgeServer.js";
+export * from "./hooks/onReceive.js";
 export * from "./bridge/uploadParser.js";
 export * from "./session/SessionStore.js";
 export * from "./dht/DhtTransport.js";
