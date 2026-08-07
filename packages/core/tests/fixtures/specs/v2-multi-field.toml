@@ -1,0 +1,19 @@
+title = "Credential handoff"
+
+[[fields]]
+name = "token"
+type = "secret"
+label = "Token"
+required = true
+
+[[fields]]
+name = "account_id"
+type = "secret"
+label = "Account ID"
+required = true
+
+[[fields]]
+name = "note"
+type = "text"
+label = "Note"
+required = false

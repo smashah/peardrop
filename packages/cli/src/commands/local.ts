@@ -1,8 +1,10 @@
 import { Command, Flags } from "@oclif/core";
 import { BridgeServer, DiskSink } from "@peardrop/core/node";
 import { runEffect } from "@peardrop/core/node";
+import { DropSpecError, parseDropSpecToml, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
 import * as Effect from "effect/Effect";
 import open from "open";
+import { readFileSync } from "node:fs";
 
 // process.stdout.write to a pipe is async on POSIX; awaiting the write
 // callback here guarantees the Drop URL is flushed before any subsequent
@@ -23,10 +25,30 @@ export default class LocalCommand extends Command {
     pin: Flags.boolean({ description: "Require PIN code" }),
     lan: Flags.boolean({ description: "Bind 0.0.0.0 for LAN access" }),
     json: Flags.boolean({ description: "Output JSON result" }),
+    spec: Flags.string({ description: "Path to a TOML drop-page spec file", exclusive: ["spec-inline"] }),
+    "spec-inline": Flags.string({ description: "Inline TOML drop-page spec", exclusive: ["spec"] }),
   };
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(LocalCommand);
+
+    // Malformed/invalid specs fail here, before any server starts.
+    let spec: DropSpec | undefined;
+    const specSource = flags["spec-inline"] ?? (flags.spec ? readFileSync(flags.spec, "utf-8") : undefined);
+    if (specSource !== undefined) {
+      try {
+        spec = parseDropSpecToml(specSource);
+      } catch (cause) {
+        const message = cause instanceof DropSpecError ? cause.message : cause instanceof Error ? cause.message : String(cause);
+        this.error(message, { exit: 1 });
+      }
+      if (spec && specNeedsDirectoryTarget(spec) && !flags.target.endsWith("/") && !flags.target.endsWith("\\")) {
+        this.error(
+          `Spec "${flags.target}" needs a directory target (multiple fields/files would collide on one path) — pass --target with a trailing slash.`,
+          { exit: 1 }
+        );
+      }
+    }
 
     const host = flags.lan ? "0.0.0.0" : "127.0.0.1";
     const sink = new DiskSink(flags.target);
@@ -37,6 +59,7 @@ export default class LocalCommand extends Command {
       targetPathLabel: flags.target,
       maxSizeMB: flags["max-size"],
       expectedFiles: flags.files,
+      spec,
     });
 
     const { url, port, token } = await bridge.start();
