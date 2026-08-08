@@ -1,0 +1,11 @@
+title = "Bad link"
+
+[[fields]]
+name = "api_key"
+type = "secret"
+label = "API Key"
+required = true
+
+[fields.link]
+label = "Find your API key"
+url = "http://dashboard.example.com/api-keys"

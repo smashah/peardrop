@@ -116,6 +116,7 @@ export default class LocalCommand extends Command {
 
     const status = outcome === "signal" ? "cancelled" : outcome;
     const hook = bridge.hookResult();
+    const outstandingFields = bridge.outstandingFields();
     if (flags.json) {
       await writeStdout(JSON.stringify({
         mode: "local",
@@ -124,10 +125,14 @@ export default class LocalCommand extends Command {
         target: flags.target,
         pid: process.pid,
         ...(hook ? { hook: { ok: hook.ok, exitCode: hook.exitCode, signal: hook.signal, error: hook.error } } : {}),
+        ...(outstandingFields && outstandingFields.length > 0 ? { outstandingFields } : {}),
       }));
     } else {
       await writeStdout(` Session closed: ${status}`);
       if (hook) await writeStdout(` on_receive hook: ${hook.ok ? "ok" : `failed (${hook.error ?? `exit ${hook.exitCode ?? hook.signal}`})`}`);
+      if (outstandingFields && outstandingFields.length > 0) {
+        await writeStdout(` Fields not sent (optional, left blank): ${outstandingFields.join(", ")}`);
+      }
     }
 
     // Signals are already handled above (the drop server stops cleanly), so

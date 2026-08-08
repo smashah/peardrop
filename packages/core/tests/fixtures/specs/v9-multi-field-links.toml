@@ -1,0 +1,31 @@
+title = "Agent credential handoff"
+description = "Everything the agent needs in one drop."
+
+[[fields]]
+name = "api_key"
+type = "secret"
+label = "API Key"
+description = "The secret key from your provider dashboard."
+required = true
+
+[fields.link]
+label = "Find your API key"
+url = "https://dashboard.example.com/api-keys"
+
+[[fields]]
+name = "session_token"
+type = "token"
+label = "Session Token"
+description = "Short-lived token, expires in 1 hour."
+required = true
+
+[fields.link]
+label = "Generate a token"
+url = "https://dashboard.example.com/tokens/new"
+
+[[fields]]
+name = "note"
+type = "text"
+label = "Note"
+description = "Anything else the agent should know — optional."
+required = false

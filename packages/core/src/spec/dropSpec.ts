@@ -10,10 +10,19 @@ export class DropSpecError extends Data.TaggedError("DropSpecError")<{
 export const FieldTypeSchema = Schema.Literals(["secret", "text", "file", "token"]);
 export type FieldType = typeof FieldTypeSchema.Type;
 
+/** Where a receiver goes to find/generate this field's value — https-only, checked at decode time. */
+export const FieldLinkSchema = Schema.Struct({
+  label: Schema.optional(Schema.String),
+  url: Schema.NonEmptyString,
+});
+export type FieldLink = typeof FieldLinkSchema.Type;
+
 const RawFieldSpecSchema = Schema.Struct({
   name: Schema.NonEmptyString,
   type: FieldTypeSchema,
   label: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  link: Schema.optional(FieldLinkSchema),
   required: Schema.optional(Schema.Boolean),
   masked: Schema.optional(Schema.Boolean),
   placeholder: Schema.optional(Schema.String),
@@ -109,6 +118,9 @@ export function decodeDropSpec(raw: unknown): DropSpec {
         throw new DropSpecError({ message: `Invalid regex for field "${field.name}": ${cause instanceof Error ? cause.message : String(cause)}` });
       }
     }
+    if (field.link && !field.link.url.startsWith("https://")) {
+      throw new DropSpecError({ message: `Field "${field.name}" link.url must be https:// — got "${field.link.url}"` });
+    }
   }
 
   return spec;
@@ -162,6 +174,22 @@ export function validateSpecSubmission(spec: DropSpec, values: ReadonlyMap<strin
     if (error) errors[field.name] = error;
   }
   return errors;
+}
+
+/**
+ * Field names from `spec.fields` that a submission left out — i.e. an
+ * optional field with no value or empty text/no files. A submission that
+ * validates (`validateSpecSubmission` returns no errors) can still be
+ * partial, and this is what tells a receiver which fields to expect later.
+ */
+export function outstandingSpecFields(spec: DropSpec, values: ReadonlyMap<string, FieldSubmission>): ReadonlyArray<string> {
+  return spec.fields
+    .filter((field) => {
+      const submission = values.get(field.name);
+      if (!submission) return true;
+      return submission.kind === "text" ? submission.text.length === 0 : submission.files.length === 0;
+    })
+    .map((field) => field.name);
 }
 
 export { isMasked };

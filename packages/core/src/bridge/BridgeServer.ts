@@ -45,8 +45,10 @@ const DROP_PAGE_STYLES = `
     h1 { margin: 0; font-size: 1.05rem; font-weight: 600; letter-spacing: -.015em; }
     .muted { margin: .5rem 0 0; color: var(--text-muted); font-size: .85rem; line-height: 1.6; }
     .mono { color: var(--text); font-family: var(--mono); }
-    .field { margin-top: 1.25rem; }
+    .field { margin-top: 1.25rem; padding-left: .6rem; border-left: 2px solid var(--line); }
     label { display: block; margin-bottom: .35rem; color: var(--text-quiet); font: .7rem var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    .field-description { margin: 0 0 .5rem; color: var(--text-muted); font-size: .8rem; line-height: 1.5; }
+    .field-link { display: inline-block; margin-top: .4rem; color: var(--text); font-size: .78rem; text-decoration: underline; text-underline-offset: .15em; }
     input, textarea { width: 100%; padding: .7rem; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); font-family: var(--mono); font-size: .8rem; }
     input:focus, textarea:focus { border-color: var(--text); outline: 2px solid var(--text); outline-offset: -1px; }
     .drop { margin-top: 1.25rem; padding: 1.75rem; border: 1px dashed var(--line-strong); color: var(--text-muted); text-align: center; cursor: pointer; transition: border-color .18s ease, background .18s ease; }
@@ -252,6 +254,7 @@ export class BridgeServer {
   private onReceive?: BridgeOnReceiveHook;
   private hookLog?: (chunk: string) => void;
   private lastHookResult: OnReceiveHookResult | null = null;
+  private lastOutstandingFields: ReadonlyArray<string> | null = null;
 
   constructor(options: BridgeServerOptions) {
     // Two separate things, deliberately: `token` is the 128-bit single-use
@@ -274,6 +277,11 @@ export class BridgeServer {
   /** Result of the post-receive hook, or null when no hook ran. */
   hookResult(): OnReceiveHookResult | null {
     return this.lastHookResult;
+  }
+
+  /** Spec field names the last successful spec upload left out, or null before any delivery. */
+  outstandingFields(): ReadonlyArray<string> | null {
+    return this.lastOutstandingFields;
   }
 
   /**
@@ -563,6 +571,8 @@ ${DROP_PAGE_STYLES}
         name: field.name,
         type: field.type,
         label: field.label ?? field.name,
+        description: field.description ?? "",
+        link: field.link ? { label: field.link.label ?? field.link.url, url: field.link.url } : null,
         required: field.required,
         masked: isMasked(field),
         placeholder: field.placeholder ?? "",
@@ -615,6 +625,13 @@ ${DROP_PAGE_STYLES}
       label.textContent = field.label + (field.required ? ' *' : '');
       wrap.appendChild(label);
 
+      if (field.description) {
+        const desc = document.createElement('p');
+        desc.className = 'field-description';
+        desc.textContent = field.description;
+        wrap.appendChild(desc);
+      }
+
       let input;
       if (field.type === 'file') {
         input = document.createElement('input');
@@ -628,6 +645,16 @@ ${DROP_PAGE_STYLES}
       }
       input.id = 'field-' + field.name;
       wrap.appendChild(input);
+
+      if (field.link) {
+        const link = document.createElement('a');
+        link.className = 'field-link';
+        link.href = field.link.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = field.link.label + ' ↗';
+        wrap.appendChild(link);
+      }
 
       const err = document.createElement('div');
       err.className = 'error';
@@ -767,8 +794,9 @@ ${DROP_PAGE_STYLES}
       }
 
       this.tokenUsed = true;
+      this.lastOutstandingFields = result.outstandingFields;
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, status: "delivered", files: deliveredFiles }));
+      res.end(JSON.stringify({ ok: true, status: "delivered", files: deliveredFiles, outstandingFields: result.outstandingFields }));
       await this.runReceiveHook(deliveredFiles);
       Effect.runFork(Deferred.succeed(this.completion, "delivered"));
     } catch (err) {
