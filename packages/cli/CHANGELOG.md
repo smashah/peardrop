@@ -4,6 +4,12 @@
 
 
 
+
+## 1.4.0
+<sub>2026-08-08</sub>
+
+- [#30](https://github.com/smashah/peardrop/pull/30) [`2090925`](https://github.com/smashah/peardrop/commit/209092525fa84c1508d61f4b66bbc63f130633eb)  *(minor)* - Per-field link + description on FieldSpec, partial-submission outstanding fields (peardrop.fyi#47)
+
 ## 1.3.0
 <sub>2026-08-07</sub>
 
