@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import * as Schema from "effect/Schema";
 import { basename } from "node:path";
 import { LimitsError } from "../effect/errors.js";
-import { type DropSpec, type FieldSubmission, validateSpecSubmission } from "../spec/dropSpec.js";
+import { type DropSpec, type FieldSubmission, outstandingSpecFields, validateSpecSubmission } from "../spec/dropSpec.js";
 import { readBoundedBody } from "./uploadParser.js";
 
 const MAX_BODY_BYTES_DEFAULT = 512 * 1024 * 1024;
@@ -31,7 +31,7 @@ export interface DeliverableFile {
 }
 
 export type SpecUploadResult =
-  | { readonly ok: true; readonly files: ReadonlyArray<DeliverableFile> }
+  | { readonly ok: true; readonly files: ReadonlyArray<DeliverableFile>; readonly outstandingFields: ReadonlyArray<string> }
   | { readonly ok: false; readonly errors: Record<string, string> };
 
 const flattenedFilename = (fieldName: string, originalName: string, index: number, total: number): string => {
@@ -104,5 +104,5 @@ export async function parseSpecUpload(req: IncomingMessage, spec: DropSpec, maxS
     throw new LimitsError({ message: `Total size ${totalBytes} exceeds limit`, limit: String(maxBytes) });
   }
 
-  return { ok: true, files };
+  return { ok: true, files, outstandingFields: outstandingSpecFields(spec, submissions) };
 }

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
 import { BridgeServer, DiskSink, type BridgeOnReceiveHook } from "../src/bridge/BridgeServer.js";
-import { decodeDropSpec, DropSpecError, parseDropSpecToml } from "../src/spec/dropSpec.js";
+import { decodeDropSpec, DropSpecError, outstandingSpecFields, parseDropSpecToml, type FieldSubmission } from "../src/spec/dropSpec.js";
 import type { OnReceiveHookResult } from "../src/hooks/onReceive.js";
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dirname, "fixtures/specs", name), "utf-8");
@@ -275,6 +275,88 @@ describe("DropSpec — variation matrix (peardrop.fyi#15)", () => {
       expect(first.status).toBe(422);
       const second = await submit({ api_key: textValue("sk-retry-after-fix") });
       expect(second.status).toBe(200);
+    });
+  });
+
+  // peardrop.fyi#47: per-field link + description, and partial submission.
+  describe("per-field link, description, and partial submission (peardrop.fyi#47)", () => {
+    it("V9: parses a per-field description and https link, distinct per field", () => {
+      const spec = parseDropSpecToml(fixture("v9-multi-field-links.toml"));
+      expect(spec.fields.map((f) => f.name)).toEqual(["api_key", "session_token", "note"]);
+
+      expect(spec.fields[0]!.description).toBe("The secret key from your provider dashboard.");
+      expect(spec.fields[0]!.link).toEqual({ label: "Find your API key", url: "https://dashboard.example.com/api-keys" });
+
+      expect(spec.fields[1]!.type).toBe("token");
+      expect(spec.fields[1]!.link).toEqual({ label: "Generate a token", url: "https://dashboard.example.com/tokens/new" });
+
+      // The third field carries neither — link and description are both optional.
+      expect(spec.fields[2]!.link).toBeUndefined();
+      expect(spec.fields[2]!.description).toBe("Anything else the agent should know — optional.");
+    });
+
+    it("V9: a field's link renders next to that field on the served page, not in a shared block", async () => {
+      await withServer(fixture("v9-multi-field-links.toml"), async ({ getPage }) => {
+        const html = await getPage();
+        expect(html).toContain("https://dashboard.example.com/api-keys");
+        expect(html).toContain("https://dashboard.example.com/tokens/new");
+        expect(html).toContain("The secret key from your provider dashboard.");
+      });
+    });
+
+    it("V9: submitting with the optional field blank succeeds; the response states it as outstanding", async () => {
+      await withServer(fixture("v9-multi-field-links.toml"), async ({ submit, directory }) => {
+        const ok = await submit({
+          api_key: textValue("sk-live-abc"),
+          session_token: textValue("tok-live-xyz"),
+        });
+        expect(ok.status).toBe(200);
+        expect(ok.body.ok).toBe(true);
+        expect(ok.body.outstandingFields).toEqual(["note"]);
+
+        await expect(readFile(join(directory, "api_key.txt"), "utf-8")).resolves.toBe("sk-live-abc");
+        await expect(readFile(join(directory, "session_token.txt"), "utf-8")).resolves.toBe("tok-live-xyz");
+        const entries = await readdir(directory);
+        expect(entries).not.toContain("note.txt");
+      });
+    });
+
+    it("V9: a fully-filled submission reports no outstanding fields", async () => {
+      await withServer(fixture("v9-multi-field-links.toml"), async ({ submit }) => {
+        const ok = await submit({
+          api_key: textValue("sk-live-abc"),
+          session_token: textValue("tok-live-xyz"),
+          note: textValue("rotate weekly"),
+        });
+        expect(ok.status).toBe(200);
+        expect(ok.body.outstandingFields).toEqual([]);
+      });
+    });
+
+    it("V10: a non-https field link is rejected at decode time, before any server starts", () => {
+      expect(() => parseDropSpecToml(fixture("v10-non-https-link.toml"))).toThrow(DropSpecError);
+      try {
+        parseDropSpecToml(fixture("v10-non-https-link.toml"));
+        expect.unreachable();
+      } catch (cause) {
+        expect(cause).toBeInstanceOf(DropSpecError);
+        expect((cause as InstanceType<typeof DropSpecError>).message).toContain("https://");
+      }
+    });
+
+    it("outstandingSpecFields: reports optional fields with no or empty submission, not required ones satisfied", () => {
+      const spec = parseDropSpecToml(fixture("v9-multi-field-links.toml"));
+      const values = new Map<string, FieldSubmission>([
+        ["api_key", { kind: "text", text: "sk-live-abc" }],
+        ["session_token", { kind: "text", text: "" }],
+      ]);
+      expect(outstandingSpecFields(spec, values)).toEqual(["session_token", "note"]);
+    });
+
+    it("outstandingSpecFields: an empty-files optional file field is outstanding too", () => {
+      const spec = parseDropSpecToml(fixture("v3-file-and-text.toml"));
+      const values = new Map<string, FieldSubmission>([["screenshot", { kind: "file", files: [{ name: "x.png", bytes: 10 }] }]]);
+      expect(outstandingSpecFields(spec, values)).toEqual(["caption"]);
     });
   });
 });
