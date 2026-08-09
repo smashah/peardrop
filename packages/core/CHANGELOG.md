@@ -4,6 +4,13 @@
 
 
 
+
+## 1.4.1
+<sub>2026-08-09</sub>
+
+- [#32](https://github.com/smashah/peardrop/pull/32) [`7122a85`](https://github.com/smashah/peardrop/commit/7122a858ae989e36276fe214a3e19704751cb691)  *(patch)*
+  Spec drop pages now render bare http/https URLs in the top-level description, request copy, and per-field descriptions as real clickable links instead of inert escaped text, so a spec author can hand a receiver a working URL to the thing they're being asked to fetch. Also fixes a separate, pre-existing gap where an unescaped `<` in `JSON.stringify` output embedded inside a `<script>` tag let a field description containing a literal `</script>` break out of the embedded spec JSON.
+
 ## 1.4.0
 <sub>2026-08-08</sub>
 
