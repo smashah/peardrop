@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BridgeServer, DiskSink } from "../src/bridge/BridgeServer.js";
 import { SLUG_PATTERN, isSlugFormat } from "../src/tunnel/slug.js";
+import { decodeDropSpec, type DropSpec } from "../src/spec/dropSpec.js";
 
 interface RawResponse {
   status: number;

@@ -16,6 +16,31 @@ import { runOnReceiveHook, type OnReceiveHookResult } from "../hooks/onReceive.j
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character] ?? character);
 
+// Escapes text and turns bare http(s) URLs within it into real anchor tags —
+// a spec author telling someone where to fetch a credential ("get it from
+// https://...") is common prose, and it read as inert text with no way to
+// click through (found by real use, 2026-08-09). URLs are found in the RAW
+// text first (so the match can't itself be corrupted by prior escaping), then
+// BOTH the surrounding text and the matched URL go through the same
+// escapeHtml — a hostile string masquerading as a URL still comes out
+// escaped and inert, since the character class the URL regex allows
+// (excluding whitespace, <, >, ", ') can't smuggle a real tag or attribute
+// break even before escaping runs.
+const linkifyHtml = (value: string): string => {
+  const urlPattern = /\bhttps?:\/\/[^\s<>"']+/g;
+  let result = "";
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = urlPattern.exec(value)) !== null) {
+    result += escapeHtml(value.slice(lastIndex, match.index));
+    const escapedUrl = escapeHtml(match[0]);
+    result += `<a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a>`;
+    lastIndex = match.index + match[0].length;
+  }
+  result += escapeHtml(value.slice(lastIndex));
+  return result;
+};
+
 // PearDrop's monochrome identity, restated for the CLI bridge. This page is
 // rendered by Node with no build step, so it can't import the webapp's
 // stylesheet — the token values here must be kept in step with DESIGN.md
@@ -599,9 +624,9 @@ ${DROP_PAGE_STYLES}
       <span class="mark"></span>
       <h1>${escapeHtml(clientSpec.title)}</h1>
     </div>
-    ${clientSpec.description ? `<p class="muted">${escapeHtml(clientSpec.description)}</p>` : ""}
+    ${clientSpec.description ? `<p class="muted">${linkifyHtml(clientSpec.description)}</p>` : ""}
     <p class="muted">Target: <span class="mono">${targetLabel}</span></p>
-    <p class="muted">${escapeHtml(clientSpec.copy.request)}</p>
+    <p class="muted">${linkifyHtml(clientSpec.copy.request)}</p>
     <form id="drop-form"></form>
     <button id="send-btn">Send Payload</button>
     <div id="status"></div>
@@ -618,6 +643,28 @@ ${DROP_PAGE_STYLES}
     const status = document.getElementById('status');
     const fileSelections = {};
 
+    // Appends text to a container, turning bare http(s) URLs into real
+    // anchor tags — built entirely from real DOM nodes (never innerHTML), so
+    // a hostile description string can only ever become an inert text node,
+    // the same guarantee textContent already had, just with linkification
+    // added rather than traded away.
+    function appendLinkified(container, text) {
+      const urlPattern = /\bhttps?:\/\/[^\s<>"']+/g;
+      let lastIndex = 0;
+      let match;
+      while ((match = urlPattern.exec(text)) !== null) {
+        if (match.index > lastIndex) container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+        const a = document.createElement('a');
+        a.href = match[0];
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = match[0];
+        container.appendChild(a);
+        lastIndex = match.index + match[0].length;
+      }
+      if (lastIndex < text.length) container.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
+
     for (const field of spec.fields) {
       const wrap = document.createElement('div');
       wrap.className = 'field';
@@ -628,7 +675,7 @@ ${DROP_PAGE_STYLES}
       if (field.description) {
         const desc = document.createElement('p');
         desc.className = 'field-description';
-        desc.textContent = field.description;
+        appendLinkified(desc, field.description);
         wrap.appendChild(desc);
       }
 
