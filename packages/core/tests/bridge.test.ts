@@ -64,8 +64,8 @@ async function withSpecBridge(spec: DropSpec, run: (ctx: {
 }) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "peardrop-bridge-spec-"));
   const bridge = new BridgeServer({ sink: new DiskSink(`${directory}/`), targetPathLabel: directory, spec });
-  const { port, slug } = await bridge.start();
   try {
+    const { port, slug } = await bridge.start();
     await run({ port, slug, directory });
   } finally {
     await bridge.stop();
@@ -189,6 +189,40 @@ describe("BridgeServer spec drop page — bare URLs linkify, hostile strings sta
       expect(page.body).toContain("appendLinkified(desc, field.description)");
       // And the raw data it operates on really does contain the field's URL.
       expect(page.body).toContain("https://console.example.com/keys/rotate");
+    });
+  });
+
+  it("doesn't swallow trailing sentence punctuation into the href", async () => {
+    const spec = decodeDropSpec({
+      description: "Get the new key from https://console.example.com/keys. See the docs (https://docs.example.com/setup) for the format.",
+      fields: [{ name: "value", type: "secret" }],
+    });
+
+    await withSpecBridge(spec, async ({ port, slug }) => {
+      const page = await rawRequest(port, `/${slug}`);
+      expect(page.status).toBe(200);
+
+      // The period ending the first sentence is not part of the URL.
+      expect(page.body).toContain('<a href="https://console.example.com/keys" target="_blank" rel="noopener noreferrer">https://console.example.com/keys</a>. See the docs');
+      expect(page.body).not.toContain("keys.\" target");
+
+      // A URL wrapped in parens keeps its own trailing paren out of the href
+      // — it closes the surrounding sentence, not the URL — and the sentence
+      // stays intact around the anchor.
+      expect(page.body).toContain('(<a href="https://docs.example.com/setup" target="_blank" rel="noopener noreferrer">https://docs.example.com/setup</a>) for the format');
+    });
+  });
+
+  it("keeps a real closing paren that's part of the URL itself", async () => {
+    const spec = decodeDropSpec({
+      description: "Docs: https://en.wikipedia.org/wiki/PearDrop_(software) has more.",
+      fields: [{ name: "value", type: "secret" }],
+    });
+
+    await withSpecBridge(spec, async ({ port, slug }) => {
+      const page = await rawRequest(port, `/${slug}`);
+      expect(page.status).toBe(200);
+      expect(page.body).toContain('<a href="https://en.wikipedia.org/wiki/PearDrop_(software)" target="_blank" rel="noopener noreferrer">https://en.wikipedia.org/wiki/PearDrop_(software)</a> has more');
     });
   });
 

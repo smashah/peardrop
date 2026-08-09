@@ -26,6 +26,31 @@ const escapeHtml = (value: string): string =>
 // escaped and inert, since the character class the URL regex allows
 // (excluding whitespace, <, >, ", ') can't smuggle a real tag or attribute
 // break even before escaping runs.
+// A greedy URL match swallows the sentence punctuation after it ("...expired.")
+// into the href. Peels trailing .,;:!? off unconditionally, and a trailing
+// )/] only when it doesn't balance an earlier (/[ in the URL (so a
+// legitimately-parenthesized URL like "(https://x.com/a(b))" keeps its own
+// close-paren, but "(see https://x.com)" doesn't take the sentence's).
+const splitTrailingPunctuation = (url: string): { core: string; trailing: string } => {
+  let core = url;
+  let trailing = "";
+  const closerToOpener: Record<string, string> = { ")": "(", "]": "[" };
+  while (core.length > 0) {
+    const last = core[core.length - 1] as string;
+    const opener = closerToOpener[last];
+    if (opener !== undefined) {
+      const opens = core.split(opener).length - 1;
+      const closes = core.split(last).length - 1;
+      if (closes <= opens) break;
+    } else if (!".,;:!?".includes(last)) {
+      break;
+    }
+    trailing = last + trailing;
+    core = core.slice(0, -1);
+  }
+  return { core, trailing };
+};
+
 const linkifyHtml = (value: string): string => {
   const urlPattern = /\bhttps?:\/\/[^\s<>"']+/g;
   let result = "";
@@ -33,8 +58,9 @@ const linkifyHtml = (value: string): string => {
   let match: RegExpExecArray | null;
   while ((match = urlPattern.exec(value)) !== null) {
     result += escapeHtml(value.slice(lastIndex, match.index));
-    const escapedUrl = escapeHtml(match[0]);
-    result += `<a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a>`;
+    const { core, trailing } = splitTrailingPunctuation(match[0]);
+    const escapedUrl = escapeHtml(core);
+    result += `<a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a>${escapeHtml(trailing)}`;
     lastIndex = match.index + match[0].length;
   }
   result += escapeHtml(value.slice(lastIndex));
@@ -657,18 +683,40 @@ ${DROP_PAGE_STYLES}
     // a hostile description string can only ever become an inert text node,
     // the same guarantee textContent already had, just with linkification
     // added rather than traded away.
+    function splitTrailingPunctuation(url) {
+      let core = url;
+      let trailing = '';
+      const closerToOpener = { ')': '(', ']': '[' };
+      while (core.length > 0) {
+        const last = core[core.length - 1];
+        const opener = closerToOpener[last];
+        if (opener !== undefined) {
+          const opens = core.split(opener).length - 1;
+          const closes = core.split(last).length - 1;
+          if (closes <= opens) break;
+        } else if ('.,;:!?'.indexOf(last) === -1) {
+          break;
+        }
+        trailing = last + trailing;
+        core = core.slice(0, -1);
+      }
+      return { core: core, trailing: trailing };
+    }
+
     function appendLinkified(container, text) {
       const urlPattern = /\bhttps?:\/\/[^\s<>"']+/g;
       let lastIndex = 0;
       let match;
       while ((match = urlPattern.exec(text)) !== null) {
         if (match.index > lastIndex) container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+        const split = splitTrailingPunctuation(match[0]);
         const a = document.createElement('a');
-        a.href = match[0];
+        a.href = split.core;
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
-        a.textContent = match[0];
+        a.textContent = split.core;
         container.appendChild(a);
+        if (split.trailing) container.appendChild(document.createTextNode(split.trailing));
         lastIndex = match.index + match[0].length;
       }
       if (lastIndex < text.length) container.appendChild(document.createTextNode(text.slice(lastIndex)));
