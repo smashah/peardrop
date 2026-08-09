@@ -16,6 +16,66 @@ import { runOnReceiveHook, type OnReceiveHookResult } from "../hooks/onReceive.j
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character] ?? character);
 
+// Escapes text and turns bare http(s) URLs within it into real anchor tags —
+// a spec author telling someone where to fetch a credential ("get it from
+// https://...") is common prose, and it read as inert text with no way to
+// click through (found by real use, 2026-08-09). URLs are found in the RAW
+// text first (so the match can't itself be corrupted by prior escaping), then
+// BOTH the surrounding text and the matched URL go through the same
+// escapeHtml — a hostile string masquerading as a URL still comes out
+// escaped and inert, since the character class the URL regex allows
+// (excluding whitespace, <, >, ", ') can't smuggle a real tag or attribute
+// break even before escaping runs.
+// A greedy URL match swallows the sentence punctuation after it ("...expired.")
+// into the href. Peels trailing .,;:!? off unconditionally, and a trailing
+// )/] only when it doesn't balance an earlier (/[ in the URL (so a
+// legitimately-parenthesized URL like "(https://x.com/a(b))" keeps its own
+// close-paren, but "(see https://x.com)" doesn't take the sentence's).
+const splitTrailingPunctuation = (url: string): { core: string; trailing: string } => {
+  let core = url;
+  let trailing = "";
+  const closerToOpener: Record<string, string> = { ")": "(", "]": "[" };
+  while (core.length > 0) {
+    const last = core[core.length - 1] as string;
+    const opener = closerToOpener[last];
+    if (opener !== undefined) {
+      const opens = core.split(opener).length - 1;
+      const closes = core.split(last).length - 1;
+      if (closes <= opens) break;
+    } else if (!".,;:!?".includes(last)) {
+      break;
+    }
+    trailing = last + trailing;
+    core = core.slice(0, -1);
+  }
+  return { core, trailing };
+};
+
+const linkifyHtml = (value: string): string => {
+  const urlPattern = /\bhttps?:\/\/[^\s<>"']+/g;
+  let result = "";
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = urlPattern.exec(value)) !== null) {
+    result += escapeHtml(value.slice(lastIndex, match.index));
+    const { core, trailing } = splitTrailingPunctuation(match[0]);
+    const escapedUrl = escapeHtml(core);
+    result += `<a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a>${escapeHtml(trailing)}`;
+    lastIndex = match.index + match[0].length;
+  }
+  result += escapeHtml(value.slice(lastIndex));
+  return result;
+};
+
+// JSON.stringify never escapes "<", so a spec-author-controlled string (a
+// field description, a label — anything that ends up in clientSpec)
+// containing a literal "</script>" prematurely closes the *actual* <script>
+// tag this gets embedded in, breaking out of the JSON entirely into real
+// HTML the browser parses. Found by testing the escaping this file already
+// had, not by assumption. < is valid inside a JSON string and identical
+// to "<" once parsed, so this is invisible to JSON.parse on the other end.
+const jsonScriptSafe = (value: unknown): string => JSON.stringify(value).replace(/</g, "\\u003c");
+
 // PearDrop's monochrome identity, restated for the CLI bridge. This page is
 // rendered by Node with no build step, so it can't import the webapp's
 // stylesheet — the token values here must be kept in step with DESIGN.md
@@ -436,7 +496,7 @@ ${DROP_PAGE_STYLES}
     <div id="status"></div>
   </div>
 
-  <script id="peardrop-token" type="application/json">${JSON.stringify(this.token)}</script>
+  <script id="peardrop-token" type="application/json">${jsonScriptSafe(this.token)}</script>
   <script>
     // The URL is the readable slug now, so the upload token is handed to the
     // page here instead of in the fragment. It is still the only thing the
@@ -599,15 +659,15 @@ ${DROP_PAGE_STYLES}
       <span class="mark"></span>
       <h1>${escapeHtml(clientSpec.title)}</h1>
     </div>
-    ${clientSpec.description ? `<p class="muted">${escapeHtml(clientSpec.description)}</p>` : ""}
+    ${clientSpec.description ? `<p class="muted">${linkifyHtml(clientSpec.description)}</p>` : ""}
     <p class="muted">Target: <span class="mono">${targetLabel}</span></p>
-    <p class="muted">${escapeHtml(clientSpec.copy.request)}</p>
+    <p class="muted">${linkifyHtml(clientSpec.copy.request)}</p>
     <form id="drop-form"></form>
     <button id="send-btn">Send Payload</button>
     <div id="status"></div>
   </div>
-  <script id="peardrop-spec" type="application/json">${JSON.stringify(clientSpec)}</script>
-  <script id="peardrop-token" type="application/json">${JSON.stringify(this.token)}</script>
+  <script id="peardrop-spec" type="application/json">${jsonScriptSafe(clientSpec)}</script>
+  <script id="peardrop-token" type="application/json">${jsonScriptSafe(this.token)}</script>
   <script>
     const spec = JSON.parse(document.getElementById('peardrop-spec').textContent);
     // Handed to the page rather than carried in the URL fragment — see the
@@ -617,6 +677,50 @@ ${DROP_PAGE_STYLES}
     const sendBtn = document.getElementById('send-btn');
     const status = document.getElementById('status');
     const fileSelections = {};
+
+    // Appends text to a container, turning bare http(s) URLs into real
+    // anchor tags — built entirely from real DOM nodes (never innerHTML), so
+    // a hostile description string can only ever become an inert text node,
+    // the same guarantee textContent already had, just with linkification
+    // added rather than traded away.
+    function splitTrailingPunctuation(url) {
+      let core = url;
+      let trailing = '';
+      const closerToOpener = { ')': '(', ']': '[' };
+      while (core.length > 0) {
+        const last = core[core.length - 1];
+        const opener = closerToOpener[last];
+        if (opener !== undefined) {
+          const opens = core.split(opener).length - 1;
+          const closes = core.split(last).length - 1;
+          if (closes <= opens) break;
+        } else if ('.,;:!?'.indexOf(last) === -1) {
+          break;
+        }
+        trailing = last + trailing;
+        core = core.slice(0, -1);
+      }
+      return { core: core, trailing: trailing };
+    }
+
+    function appendLinkified(container, text) {
+      const urlPattern = /\bhttps?:\/\/[^\s<>"']+/g;
+      let lastIndex = 0;
+      let match;
+      while ((match = urlPattern.exec(text)) !== null) {
+        if (match.index > lastIndex) container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+        const split = splitTrailingPunctuation(match[0]);
+        const a = document.createElement('a');
+        a.href = split.core;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = split.core;
+        container.appendChild(a);
+        if (split.trailing) container.appendChild(document.createTextNode(split.trailing));
+        lastIndex = match.index + match[0].length;
+      }
+      if (lastIndex < text.length) container.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
 
     for (const field of spec.fields) {
       const wrap = document.createElement('div');
@@ -628,7 +732,7 @@ ${DROP_PAGE_STYLES}
       if (field.description) {
         const desc = document.createElement('p');
         desc.className = 'field-description';
-        desc.textContent = field.description;
+        appendLinkified(desc, field.description);
         wrap.appendChild(desc);
       }
 
