@@ -60,6 +60,8 @@ on_receive = "./scripts/store-deploy-key.sh"
 name = "deploy_key"        # required, unique within the spec — also the delivered filename
 type = "secret"            # secret | text | file | token
 label = "Deploy Key"       # optional, defaults to `name`
+description = "Rotate it at https://console.example.com/keys if it's expired."  # optional — see "Description and link text" below
+link = { label = "Open the console", url = "https://console.example.com/keys" } # optional, https:// only — renders as its own clickable button, separate from description
 required = true            # optional, defaults to true
 masked = true               # optional; secret/token default to masked, text/file ignore it
 placeholder = "sk-..."      # optional, text/secret/token only
@@ -71,6 +73,8 @@ message = "Custom error"    # optional — overrides every default validation me
 ```
 
 **Field types:** `text` (plain input), `secret`/`token` (masked input by default), `file` (file picker; set `count` for multi-file fields).
+
+**Description and link text — both render markdown, not plain text.** The top-level `description`, `copy.request`, and each field's own `description` all support markdown (headings, lists, bold, inline code, links) and auto-linkify a bare `http://`/`https://` URL even without markdown link syntax — you don't need `[text](url)` for a URL to become clickable, just write it in prose. Raw HTML is stripped, not rendered, so this is safe for untrusted spec text. `link` (the structured field above) is a separate, distinct affordance — it always renders as its own clickable button, has a required `https://` scheme, and is meant for "the one place to go for this," while a `description` with a URL in it is meant for "here's some context, which happens to include a link." Use whichever affordance fits the sentence you're writing, or both.
 
 **Quantity:** a page can declare any number of `[[fields]]`. A spec that can produce more than one delivered file (more than one field, or a single `file` field with `count > 1`) requires a directory target (`--target` ending in `/`) — `peardrop local` checks this before starting the server.
 
