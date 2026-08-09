@@ -267,6 +267,21 @@ describe("DropSpec — variation matrix (peardrop.fyi#15)", () => {
       expect(() => decodeDropSpec({ fields: [{ name: "k", type: "text", format: "([" }] })).toThrow(/Invalid regex/);
       expect(() => decodeDropSpec("not an object")).toThrow(DropSpecError);
     });
+
+    // peardrop#36: an older core silently dropped a field key it didn't
+    // recognize yet (this is exactly how tonight's `link` field vanished
+    // from a stale 1.3.0 install) — turned into a loud decode error instead.
+    it("rejects an unrecognized top-level key instead of silently dropping it", () => {
+      expect(() =>
+        decodeDropSpec({ fields: [{ name: "k", type: "secret" }], totallyMadeUpKey: true })
+      ).toThrow(DropSpecError);
+    });
+
+    it("rejects an unrecognized field-level key instead of silently dropping it", () => {
+      expect(() =>
+        decodeDropSpec({ fields: [{ name: "k", type: "secret", totallyMadeUpFieldKey: "x" }] })
+      ).toThrow(DropSpecError);
+    });
   });
 
   it("a failed validation leaves the single-use token live for a resubmission", async () => {
