@@ -88,7 +88,12 @@ const isMasked = (field: FieldSpec): boolean => field.masked ?? (field.type === 
 export function decodeDropSpec(raw: unknown): DropSpec {
   let decoded: typeof RawDropSpecSchema.Type;
   try {
-    decoded = Schema.decodeUnknownSync(RawDropSpecSchema)(raw);
+    // Effect Schema silently drops a key it doesn't recognize by default,
+    // at every nesting level — an older core reading a spec with a field it
+    // predates (e.g. `link`) would lose that data with zero indication
+    // anything was wrong. Confirmed the exact real-world failure this
+    // caused (peardrop#36) before erroring on it here instead.
+    decoded = Schema.decodeUnknownSync(RawDropSpecSchema, { onExcessProperty: "error" })(raw);
   } catch (cause) {
     throw new DropSpecError({ message: `Invalid drop spec: ${String(cause)}` });
   }
