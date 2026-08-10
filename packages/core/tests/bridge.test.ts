@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BridgeServer, DiskSink } from "../src/bridge/BridgeServer.js";
 import { SLUG_PATTERN, isSlugFormat } from "../src/tunnel/slug.js";
-import { decodeDropSpec, type DropSpec } from "../src/spec/dropSpec.js";
+import { decodeDropSpec, DropSpecError, type DropSpec } from "../src/spec/dropSpec.js";
 
 interface RawResponse {
   status: number;
@@ -277,5 +277,111 @@ describe("BridgeServer spec drop page — bare URLs linkify, hostile strings sta
       // \u003c/script\u003e.
       expect(page.body).toContain("\\u003c/script>");
     });
+  });
+});
+
+describe("BridgeServer spec drop page — [[groups]] and field-direction attributes (peardrop#34)", () => {
+  it("computes one server-side section for a grouped spec, member fields included, group link present once", async () => {
+    const spec = decodeDropSpec({
+      groups: [{ name: "airwallex", title: "Airwallex", link: { label: "Open Airwallex API keys", url: "https://demo.airwallex.com/apiKeys" } }],
+      fields: [
+        { name: "api_key", type: "secret", label: "API key", group: "airwallex" },
+        { name: "client_id", type: "secret", label: "Client ID", group: "airwallex" },
+        { name: "notes", type: "text", label: "Notes" },
+      ],
+    });
+
+    await withSpecBridge(spec, async ({ port, slug }) => {
+      const page = await rawRequest(port, `/${slug}`);
+      expect(page.status).toBe(200);
+
+      // The group link URL must appear exactly once in the whole page — it's
+      // computed server-side by the real groupSpecFields (one section holds
+      // both grouped fields), and rendered once per section client-side, not
+      // once per member field. (An explicit label is given here specifically
+      // so the URL itself isn't also duplicated as the fallback label text —
+      // that's real, correct, separate behavior mirroring field.link, not
+      // what this assertion is about.)
+      const linkOccurrences = page.body.split("https://demo.airwallex.com/apiKeys").length - 1;
+      expect(linkOccurrences).toBe(1);
+
+      expect(page.body).toContain('"group":{"name":"airwallex"');
+      expect(page.body).toContain('"title":"Airwallex"');
+      // Both grouped field names appear in the same section's field list,
+      // ungrouped "notes" does not carry a group.
+      expect(page.body).toContain('"name":"api_key"');
+      expect(page.body).toContain('"name":"client_id"');
+      expect(page.body).toContain('"name":"notes"');
+    });
+  });
+
+  it("wires the client-side rendering to build a collapsible, open-by-default group from the pre-computed sections", async () => {
+    const spec = decodeDropSpec({
+      groups: [{ name: "g", title: "Group" }],
+      fields: [{ name: "a", type: "secret", group: "g" }],
+    });
+
+    await withSpecBridge(spec, async ({ port, slug }) => {
+      const page = await rawRequest(port, `/${slug}`);
+      expect(page.status).toBe(200);
+
+      // The rendering loop iterates the server-computed sections, never
+      // re-groups spec.fields itself.
+      expect(page.body).toContain("for (const section of spec.sections)");
+      expect(page.body).toContain("details.className = 'spec-group'");
+      expect(page.body).toContain("details.open = true");
+      expect(page.body).toContain("summary.textContent = section.group.title");
+    });
+  });
+
+  it("renders scope, entry_url, resource_name, and shown_once as read-only/copy affordances, never as an input", async () => {
+    const spec = decodeDropSpec({
+      fields: [
+        {
+          name: "webhook",
+          type: "secret",
+          label: "Webhook secret",
+          scope: ["payments:read", "payments:write"],
+          entry_url: "https://example.com/webhooks/peardrop",
+          resource_name: "peardrop-relay-hook",
+          shown_once: true,
+        },
+      ],
+    });
+
+    await withSpecBridge(spec, async ({ port, slug }) => {
+      const page = await rawRequest(port, `/${slug}`);
+      expect(page.status).toBe(200);
+
+      // The data travels as plain JSON —
+      expect(page.body).toContain('"scope":["payments:read","payments:write"]');
+      expect(page.body).toContain('"entryUrl":"https://example.com/webhooks/peardrop"');
+      expect(page.body).toContain('"resourceName":"peardrop-relay-hook"');
+      expect(page.body).toContain('"shownOnce":true');
+
+      // — and the client-side code that turns entry_url/resource_name into
+      // read-only-plus-copy (never an <input>) is present and wired, same
+      // discipline as every other client-rendered field affordance in this
+      // file: assert the function and its call sites exist, since the DOM
+      // it builds only exists after real JS execution.
+      expect(page.body).toContain("function appendCopyButton(container, value, label)");
+      expect(page.body).toContain("if (field.entryUrl)");
+      expect(page.body).toContain("if (field.resourceName)");
+      expect(page.body).toContain("if (field.shownOnce)");
+      expect(page.body).toContain("if (field.scope && field.scope.length > 0)");
+      // Never built as an <input> for these values.
+      expect(page.body).not.toMatch(/entryUrl[\s\S]{0,80}createElement\('input'\)/);
+    });
+  });
+
+  it("rejects a spec with a duplicate group name or a field referencing an unknown group, before any server starts", async () => {
+    expect(() =>
+      decodeDropSpec({
+        groups: [{ name: "dup" }, { name: "dup" }],
+        fields: [{ name: "a", type: "text", group: "dup" }],
+      })
+    ).toThrow(DropSpecError);
+
+    expect(() => decodeDropSpec({ fields: [{ name: "a", type: "text", group: "missing" }] })).toThrow(DropSpecError);
   });
 });

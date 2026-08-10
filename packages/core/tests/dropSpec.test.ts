@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
 import { BridgeServer, DiskSink, type BridgeOnReceiveHook } from "../src/bridge/BridgeServer.js";
-import { decodeDropSpec, DropSpecError, outstandingSpecFields, parseDropSpecToml, type FieldSubmission } from "../src/spec/dropSpec.js";
+import { decodeDropSpec, DropSpecError, groupSpecFields, outstandingSpecFields, parseDropSpecToml, validateSpecSubmission, type FieldSubmission } from "../src/spec/dropSpec.js";
 import type { OnReceiveHookResult } from "../src/hooks/onReceive.js";
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dirname, "fixtures/specs", name), "utf-8");
@@ -372,6 +372,157 @@ describe("DropSpec — variation matrix (peardrop.fyi#15)", () => {
       const spec = parseDropSpecToml(fixture("v3-file-and-text.toml"));
       const values = new Map<string, FieldSubmission>([["screenshot", { kind: "file", files: [{ name: "x.png", bytes: 10 }] }]]);
       expect(outstandingSpecFields(spec, values)).toEqual(["caption"]);
+    });
+  });
+});
+
+describe("[[groups]] and field-direction attributes (peardrop#34)", () => {
+  it("rejects a duplicate group name", () => {
+    expect(() =>
+      decodeDropSpec({
+        groups: [{ name: "airwallex" }, { name: "airwallex" }],
+        fields: [{ name: "k", type: "secret", group: "airwallex" }],
+      })
+    ).toThrow(/Duplicate group name/);
+  });
+
+  it("rejects a field referencing a group that doesn't exist", () => {
+    expect(() => decodeDropSpec({ fields: [{ name: "k", type: "secret", group: "nope" }] })).toThrow(/unknown group "nope"/);
+  });
+
+  it("rejects a non-https group.link.url", () => {
+    expect(() =>
+      decodeDropSpec({
+        groups: [{ name: "airwallex", link: { url: "http://demo.airwallex.com" } }],
+        fields: [{ name: "k", type: "secret", group: "airwallex" }],
+      })
+    ).toThrow(/Group "airwallex" link.url must be https/);
+  });
+
+  it("rejects a non-https entry_url", () => {
+    expect(() => decodeDropSpec({ fields: [{ name: "k", type: "secret", entry_url: "http://example.com/webhook" }] })).toThrow(
+      /entry_url must be https/
+    );
+  });
+
+  it("accepts and round-trips scope, entry_url, resource_name, and shown_once", () => {
+    const spec = decodeDropSpec({
+      fields: [
+        {
+          name: "webhook",
+          type: "secret",
+          scope: ["payments:read", "payments:write"],
+          entry_url: "https://example.com/webhooks/peardrop",
+          resource_name: "peardrop-relay-hook",
+          shown_once: true,
+        },
+      ],
+    });
+    const field = spec.fields[0]!;
+    expect(field.scope).toEqual(["payments:read", "payments:write"]);
+    expect(field.entry_url).toBe("https://example.com/webhooks/peardrop");
+    expect(field.resource_name).toBe("peardrop-relay-hook");
+    expect(field.shown_once).toBe(true);
+  });
+
+  describe("groupSpecFields", () => {
+    it("gives every ungrouped field its own singleton section, in declaration order", () => {
+      const spec = decodeDropSpec({
+        fields: [
+          { name: "a", type: "text" },
+          { name: "b", type: "text" },
+        ],
+      });
+      const sections = groupSpecFields(spec);
+      expect(sections).toHaveLength(2);
+      expect(sections[0]!.group).toBeUndefined();
+      expect(sections[0]!.fields.map((f) => f.name)).toEqual(["a"]);
+      expect(sections[1]!.fields.map((f) => f.name)).toEqual(["b"]);
+    });
+
+    it("collapses consecutive same-group fields into one section carrying the group metadata", () => {
+      const spec = decodeDropSpec({
+        groups: [{ name: "airwallex", title: "Airwallex", link: { url: "https://demo.airwallex.com/apiKeys" } }],
+        fields: [
+          { name: "api_key", type: "secret", group: "airwallex" },
+          { name: "client_id", type: "secret", group: "airwallex" },
+          { name: "webhook_secret", type: "secret", group: "airwallex" },
+        ],
+      });
+      const sections = groupSpecFields(spec);
+      expect(sections).toHaveLength(1);
+      expect(sections[0]!.group?.name).toBe("airwallex");
+      expect(sections[0]!.group?.title).toBe("Airwallex");
+      expect(sections[0]!.fields.map((f) => f.name)).toEqual(["api_key", "client_id", "webhook_secret"]);
+    });
+
+    it("doesn't merge the same group across a non-consecutive gap — declaration order is the layout, not a silent reorder", () => {
+      const spec = decodeDropSpec({
+        groups: [{ name: "g" }],
+        fields: [
+          { name: "a", type: "text", group: "g" },
+          { name: "b", type: "text" },
+          { name: "c", type: "text", group: "g" },
+        ],
+      });
+      const sections = groupSpecFields(spec);
+      expect(sections).toHaveLength(3);
+      expect(sections.map((s) => s.fields.map((f) => f.name))).toEqual([["a"], ["b"], ["c"]]);
+      expect(sections[0]!.group?.name).toBe("g");
+      expect(sections[2]!.group?.name).toBe("g");
+    });
+
+    it("places a mixed grouped/ungrouped spec's sections at each group's first-member position", () => {
+      const spec = decodeDropSpec({
+        groups: [{ name: "g" }],
+        fields: [
+          { name: "solo", type: "text" },
+          { name: "a", type: "text", group: "g" },
+          { name: "b", type: "text", group: "g" },
+          { name: "solo2", type: "text" },
+        ],
+      });
+      const sections = groupSpecFields(spec);
+      expect(sections.map((s) => s.fields.map((f) => f.name))).toEqual([["solo"], ["a", "b"], ["solo2"]]);
+    });
+  });
+
+  describe("allOrNothing groups and outstandingSpecFields", () => {
+    const ALL_OR_NOTHING_SPEC = () =>
+      decodeDropSpec({
+        groups: [{ name: "airwallex", allOrNothing: true }],
+        fields: [
+          { name: "api_key", type: "secret", group: "airwallex", required: false },
+          { name: "client_id", type: "text", group: "airwallex", required: false },
+        ],
+      });
+
+    it("reports every member outstanding when the group is only partially filled", () => {
+      const spec = ALL_OR_NOTHING_SPEC();
+      const values = new Map<string, FieldSubmission>([["api_key", { kind: "text", text: "sk-live" }]]);
+      expect(outstandingSpecFields(spec, values)).toEqual(["api_key", "client_id"]);
+    });
+
+    it("reports nothing outstanding once every member is filled", () => {
+      const spec = ALL_OR_NOTHING_SPEC();
+      const values = new Map<string, FieldSubmission>([
+        ["api_key", { kind: "text", text: "sk-live" }],
+        ["client_id", { kind: "text", text: "cid-123" }],
+      ]);
+      expect(outstandingSpecFields(spec, values)).toEqual([]);
+    });
+
+    it("still reports both outstanding when the group is entirely empty (base behavior, unaffected)", () => {
+      const spec = ALL_OR_NOTHING_SPEC();
+      expect(outstandingSpecFields(spec, new Map())).toEqual(["api_key", "client_id"]);
+    });
+
+    it("does not force a hard validation error for a partially-filled allOrNothing group — v1 is UI copy only", () => {
+      const spec = ALL_OR_NOTHING_SPEC();
+      const values = new Map<string, FieldSubmission>([["api_key", { kind: "text", text: "sk-live" }]]);
+      // Both fields are `required: false` — an all-or-nothing group must not
+      // invent a submission-blocking error the field's own spec didn't ask for.
+      expect(validateSpecSubmission(spec, values)).toEqual({});
     });
   });
 });

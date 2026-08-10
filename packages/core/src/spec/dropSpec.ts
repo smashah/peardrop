@@ -17,12 +17,38 @@ export const FieldLinkSchema = Schema.Struct({
 });
 export type FieldLink = typeof FieldLinkSchema.Type;
 
+/**
+ * Related fields that come from one console/service, rendered as one visual
+ * block instead of an undifferentiated flat list (peardrop#34). `link`, like
+ * a field's own, is https-only. `allOrNothing` is UI-copy scope only — see
+ * the outstanding-fields handling below — never a hard submission block,
+ * since specs lean on partial, come-back-later delivery.
+ */
+export const GroupSpecSchema = Schema.Struct({
+  name: Schema.NonEmptyString,
+  title: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  link: Schema.optional(FieldLinkSchema),
+  allOrNothing: Schema.optional(Schema.Boolean),
+});
+export type GroupSpec = typeof GroupSpecSchema.Type;
+
 const RawFieldSpecSchema = Schema.Struct({
   name: Schema.NonEmptyString,
   type: FieldTypeSchema,
   label: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
   link: Schema.optional(FieldLinkSchema),
+  group: Schema.optional(Schema.NonEmptyString),
+  // A normal field collects a value FROM the recipient. scope/entry_url/
+  // resource_name are the opposite direction — things the recipient reads or
+  // carries TO the provider, not an input (peardrop#34 addendum). scope is a
+  // list so it renders as chips/a checklist, not a paragraph; entry_url is
+  // https-only like FieldLinkSchema.url, for the same reason.
+  scope: Schema.optional(Schema.Array(Schema.NonEmptyString)),
+  entry_url: Schema.optional(Schema.NonEmptyString),
+  resource_name: Schema.optional(Schema.NonEmptyString),
+  shown_once: Schema.optional(Schema.Boolean),
   required: Schema.optional(Schema.Boolean),
   masked: Schema.optional(Schema.Boolean),
   placeholder: Schema.optional(Schema.String),
@@ -56,6 +82,7 @@ const RawDropSpecSchema = Schema.Struct({
   description: Schema.optional(Schema.String),
   copy: Schema.optional(CopySpecSchema),
   hooks: Schema.optional(HooksSpecSchema),
+  groups: Schema.optional(Schema.Array(GroupSpecSchema)),
   fields: Schema.NonEmptyArray(RawFieldSpecSchema),
 });
 
@@ -64,6 +91,7 @@ export interface DropSpec {
   readonly description?: string;
   readonly copy: CopySpec;
   readonly hooks: HooksSpec;
+  readonly groups: ReadonlyArray<GroupSpec>;
   readonly fields: ReadonlyArray<FieldSpec>;
 }
 
@@ -79,6 +107,13 @@ export const DEFAULT_VALIDATION_MESSAGES = {
 };
 
 const isMasked = (field: FieldSpec): boolean => field.masked ?? (field.type === "secret" || field.type === "token");
+
+/** Shared https-only check for every link-shaped value in a spec — field.link, group.link, entry_url alike. */
+const assertHttpsUrl = (url: string, context: string): void => {
+  if (!url.startsWith("https://")) {
+    throw new DropSpecError({ message: `${context} must be https:// — got "${url}"` });
+  }
+};
 
 /**
  * Validates an already-parsed spec object (TOML table or JSON) into a DropSpec.
@@ -103,11 +138,21 @@ export function decodeDropSpec(raw: unknown): DropSpec {
     description: decoded.description,
     copy: decoded.copy ?? {},
     hooks: decoded.hooks ?? {},
+    groups: decoded.groups ?? [],
     fields: decoded.fields.map(withFieldDefaults),
   };
 
   if (spec.hooks.on_receive !== undefined && spec.hooks.on_receive.trim().length === 0) {
     throw new DropSpecError({ message: "hooks.on_receive must be a non-empty command." });
+  }
+
+  const seenGroups = new Set<string>();
+  for (const group of spec.groups) {
+    if (seenGroups.has(group.name)) {
+      throw new DropSpecError({ message: `Duplicate group name in spec: ${group.name}` });
+    }
+    seenGroups.add(group.name);
+    if (group.link) assertHttpsUrl(group.link.url, `Group "${group.name}" link.url`);
   }
 
   const seen = new Set<string>();
@@ -123,8 +168,10 @@ export function decodeDropSpec(raw: unknown): DropSpec {
         throw new DropSpecError({ message: `Invalid regex for field "${field.name}": ${cause instanceof Error ? cause.message : String(cause)}` });
       }
     }
-    if (field.link && !field.link.url.startsWith("https://")) {
-      throw new DropSpecError({ message: `Field "${field.name}" link.url must be https:// — got "${field.link.url}"` });
+    if (field.link) assertHttpsUrl(field.link.url, `Field "${field.name}" link.url`);
+    if (field.entry_url) assertHttpsUrl(field.entry_url, `Field "${field.name}" entry_url`);
+    if (field.group !== undefined && !seenGroups.has(field.group)) {
+      throw new DropSpecError({ message: `Field "${field.name}" references unknown group "${field.group}"` });
     }
   }
 
@@ -147,6 +194,40 @@ export function specNeedsDirectoryTarget(spec: DropSpec): boolean {
   if (spec.fields.length > 1) return true;
   const [only] = spec.fields;
   return only?.type === "file" && (only.count ?? 1) > 1;
+}
+
+/** One rendering unit: either a named group with its member fields, or a single ungrouped field. */
+export interface SpecSection {
+  readonly group?: GroupSpec;
+  readonly fields: ReadonlyArray<FieldSpec>;
+}
+
+/**
+ * Partitions `spec.fields` into sections in field-declaration order — the
+ * TOML's field order is still the single layout source of truth, a group's
+ * position is wherever its first member field appears. Only CONSECUTIVE
+ * fields sharing the same named `group` merge into one section; two
+ * adjacent ungrouped fields each stay their own singleton section.
+ *
+ * Both renderers (BridgeServer.ts, peardrop.fyi's SPA) must call this
+ * rather than re-deriving grouping independently — two renderers drifting
+ * apart on the same spec is exactly what caused tonight's link-rendering
+ * confusion (peardrop.fyi#104 vs smashah/peardrop#32).
+ */
+export function groupSpecFields(spec: DropSpec): ReadonlyArray<SpecSection> {
+  const groupsByName = new Map(spec.groups.map((group) => [group.name, group] as const));
+  const sections: SpecSection[] = [];
+
+  for (const field of spec.fields) {
+    const last = sections[sections.length - 1];
+    if (field.group !== undefined && last?.group?.name === field.group) {
+      sections[sections.length - 1] = { group: last.group, fields: [...last.fields, field] };
+    } else {
+      sections.push({ group: field.group !== undefined ? groupsByName.get(field.group) : undefined, fields: [field] });
+    }
+  }
+
+  return sections;
 }
 
 export type FieldSubmission = { readonly kind: "text"; readonly text: string } | { readonly kind: "file"; readonly files: ReadonlyArray<{ name: string; bytes: number }> };
@@ -186,15 +267,31 @@ export function validateSpecSubmission(spec: DropSpec, values: ReadonlyMap<strin
  * optional field with no value or empty text/no files. A submission that
  * validates (`validateSpecSubmission` returns no errors) can still be
  * partial, and this is what tells a receiver which fields to expect later.
+ *
+ * An `allOrNothing` group that's only partially filled reports every member
+ * as outstanding, not just the empty ones — a client ID without its API key
+ * is useless, so a partial group is a false partial success, not a real one.
  */
 export function outstandingSpecFields(spec: DropSpec, values: ReadonlyMap<string, FieldSubmission>): ReadonlyArray<string> {
-  return spec.fields
-    .filter((field) => {
-      const submission = values.get(field.name);
-      if (!submission) return true;
-      return submission.kind === "text" ? submission.text.length === 0 : submission.files.length === 0;
-    })
-    .map((field) => field.name);
+  const isEmpty = (field: FieldSpec): boolean => {
+    const submission = values.get(field.name);
+    if (!submission) return true;
+    return submission.kind === "text" ? submission.text.length === 0 : submission.files.length === 0;
+  };
+
+  const outstanding = new Set(spec.fields.filter(isEmpty).map((field) => field.name));
+
+  for (const group of spec.groups) {
+    if (!group.allOrNothing) continue;
+    const members = spec.fields.filter((field) => field.group === group.name);
+    const anyFilled = members.some((field) => !isEmpty(field));
+    const allFilled = members.every((field) => !isEmpty(field));
+    if (anyFilled && !allFilled) {
+      for (const field of members) outstanding.add(field.name);
+    }
+  }
+
+  return spec.fields.map((field) => field.name).filter((name) => outstanding.has(name));
 }
 
 export { isMasked };
