@@ -5,6 +5,13 @@
 
 
 
+
+## 1.4.2
+<sub>2026-08-10</sub>
+
+- [#37](https://github.com/smashah/peardrop/pull/37) [`3f95f57`](https://github.com/smashah/peardrop/commit/3f95f57701a18d5a2b482c2abcbca4ba841ce18c)  *(patch)*
+  `decodeDropSpec` now rejects a spec containing a key it doesn't recognize instead of silently discarding it — an older `@peardrop/core` reading a spec with a field it predates (e.g. `link`) used to lose that data with zero indication anything was wrong. Now it throws a clear `DropSpecError` naming the unrecognized key instead.
+
 ## 1.4.1
 <sub>2026-08-09</sub>
 

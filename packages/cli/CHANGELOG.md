@@ -6,6 +6,13 @@
 
 
 
+
+## 1.4.2
+<sub>2026-08-10</sub>
+
+- [#38](https://github.com/smashah/peardrop/pull/38) [`66b4e7a`](https://github.com/smashah/peardrop/commit/66b4e7acd1daade13a711792aa6d5a74e1ba8720)  *(patch)*
+  `peardrop receive --relay` now tears its own tunnel down when interrupted with Ctrl-C or `kill <pid>` (SIGINT/SIGTERM), the same Worker cancellation `peardrop cancel` already performs. Previously, ending a session any way other than running `peardrop cancel` afterward left the drop page answering HTTP 200 — looking fully live — with no receiver actually listening, until the tunnel's TTL expired on its own.
+
 ## 1.4.1
 <sub>2026-08-09</sub>
 
