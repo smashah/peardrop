@@ -6,6 +6,13 @@
 
 
 
+
+## 1.5.0
+<sub>2026-08-10</sub>
+
+- [#40](https://github.com/smashah/peardrop/pull/40) [`a2d3b82`](https://github.com/smashah/peardrop/commit/a2d3b8224014b8794063ee4b85c6234974d34aa0)  *(minor)*
+  Adds a `[[groups]]` table so related fields (an API key + client ID + webhook secret from the same console) render as one visual block instead of an undifferentiated flat list of boxes, and four new per-field attributes — `scope`, `entry_url`, `resource_name`, `shown_once` — for values a recipient reads or carries *to* a provider rather than types in, rendered as chips/read-only-plus-copy instead of prose or an input.
+
 ## 1.4.2
 <sub>2026-08-10</sub>
 
