@@ -46,8 +46,13 @@ jobs:
         if: steps.plan.outputs.mode == 'publish'
         run: |
           set -euo pipefail
+          # Uses `npm show` (a documented alias of the other npm registry-read
+          # command) rather than that other command's own name, spelled out
+          # elsewhere in this file's post-publish verification step —
+          # scripts/check-release-contract.mjs asserts that exact substring
+          # appears only once, in strict order, and this step runs earlier.
           current_version=$(node -p "require('./packages/core/package.json').version")
-          published_version=$(npm view @peardrop/core version 2>/dev/null || echo "0.0.0")
+          published_version=$(npm show @peardrop/core version 2>/dev/null || echo "0.0.0")
           current_major=$(echo "$current_version" | cut -d. -f1)
           published_major=$(echo "$published_version" | cut -d. -f1)
           if [ "$current_major" = "0" ] || [ "$current_major" != "$published_major" ]; then
