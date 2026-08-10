@@ -21,6 +21,7 @@ jobs:
       contents: read
     outputs:
       mode: ${{ steps.plan.outputs.mode }}
+      bump: ${{ steps.classify.outputs.bump }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,6 +36,27 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - id: plan
         run: pnpm exec bumpy ci plan
+      # Only meaningful in publish mode — the version-pr path never reads
+      # this output. @peardrop/core stands in for the whole fixed group
+      # (core/cli/relay always version together, see .bumpy/_config.json),
+      # so its major-vs-published diff speaks for the release as a whole.
+      # A 0.x package is always major-gated regardless of what changed,
+      # since a 0.x minor can still break callers under semver convention.
+      - id: classify
+        if: steps.plan.outputs.mode == 'publish'
+        run: |
+          set -euo pipefail
+          current_version=$(node -p "require('./packages/core/package.json').version")
+          published_version=$(npm view @peardrop/core version 2>/dev/null || echo "0.0.0")
+          current_major=$(echo "$current_version" | cut -d. -f1)
+          published_major=$(echo "$published_version" | cut -d. -f1)
+          if [ "$current_major" = "0" ] || [ "$current_major" != "$published_major" ]; then
+            bump=major
+          else
+            bump=minorpatch
+          fi
+          echo "current=$current_version published=$published_version bump=$bump"
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
 
   version-pr:
     if: needs.plan.outputs.mode == 'version-pr'
@@ -60,8 +82,89 @@ jobs:
           BUMPY_GH_TOKEN: ${{ secrets.BUMPY_GH_TOKEN || github.token }}
           GH_TOKEN: ${{ github.token }}
 
-  publish:
-    if: needs.plan.outputs.mode == 'publish'
+  # Split in two so GitHub's per-environment approval gate applies to major
+  # releases only — an environment can't be made conditional on a single job.
+  # Same steps in both; the only differences are `if:` and `environment:`.
+  # Mohammed, 2026-08-10: "i dont want to have to click approve everytime
+  # for these packages" — patch/minor already clear without him (M-021),
+  # this is that decision enforced by the pipeline rather than by memory.
+  publish-auto:
+    if: needs.plan.outputs.mode == 'publish' && needs.plan.outputs.bump == 'minorpatch'
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run boundary:check
+      - run: pnpm run check-types
+      - run: pnpm run test
+      - run: pnpm run build
+      - run: pnpm run package:smoke
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish versioned relay image
+        id: relay
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./apps/relay/package.json').version")
+          image=ghcr.io/smashah/peardrop-relay
+          docker build -f infra/relay/Dockerfile -t "$image:$version" .
+          docker push "$image:$version"
+          digest_ref=$(docker inspect --format='{{index .RepoDigests 0}}' "$image:$version")
+          test -n "$digest_ref"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest_ref=$digest_ref" >> "$GITHUB_OUTPUT"
+      - name: Use npm with trusted publishing support
+        run: npm install --global npm@latest
+      - run: pnpm exec bumpy ci release --expect-mode publish
+        env:
+          BUMPY_GH_TOKEN: ${{ secrets.BUMPY_GH_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
+      - name: Verify npm packages
+        env:
+          VERSION: ${{ steps.relay.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(npm view "@peardrop/core@$VERSION" version)" = "$VERSION"
+          test "$(npm view "@peardrop/cli@$VERSION" version)" = "$VERSION"
+      - name: Verify GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.relay.outputs.version }}
+        run: gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -F -- "$VERSION"
+      - name: Promote verified relay image
+        env:
+          DIGEST_REF: ${{ steps.relay.outputs.digest_ref }}
+          IMAGE: ${{ steps.relay.outputs.image }}
+          VERSION: ${{ steps.relay.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker tag "$IMAGE:$VERSION" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
+          docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:latest" | grep -F -- "${DIGEST_REF#*@}"
+          echo "Relay image: $DIGEST_REF" >> "$GITHUB_STEP_SUMMARY"
+
+  publish-major:
+    if: needs.plan.outputs.mode == 'publish' && needs.plan.outputs.bump == 'major'
     needs: plan
     runs-on: ubuntu-latest
     environment: publish
