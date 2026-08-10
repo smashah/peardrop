@@ -213,7 +213,20 @@ export default class ReceiveCommand extends Command {
     }
 
     const abort = new AbortController();
-    const onSignal = () => abort.abort();
+    // `cancel.ts` already makes the Worker DELETE that tears a tunnel down
+    // properly — it just was never called from here. Without it, killing this
+    // process (Ctrl-C, `kill <pid>`, anything short of `peardrop cancel`) left
+    // the Worker's KV record alive until its TTL, so the drop page kept
+    // answering 200 with nothing behind it: a sender could paste a live
+    // credential into a page nothing would ever collect (peardrop#35). Only
+    // a genuine SIGINT/SIGTERM should trigger this — a natural completion
+    // (delivered, or an internal abort like a declined relay-overage payment)
+    // already updates the Worker's own state correctly on its own.
+    let signalReceived = false;
+    const onSignal = () => {
+      signalReceived = true;
+      abort.abort();
+    };
     process.on("SIGINT", onSignal);
     process.on("SIGTERM", onSignal);
 
@@ -334,6 +347,21 @@ export default class ReceiveCommand extends Command {
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
       abort.abort();
+
+      if (signalReceived) {
+        try {
+          const cancelled = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${tunnelState.ownerToken}` },
+          });
+          if (!cancelled.ok) {
+            this.warn(`Tunnel cancellation on exit failed with HTTP ${cancelled.status} — the drop page may stay live until it expires.`);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.warn(`Tunnel cancellation on exit failed (${message}) — the drop page may stay live until it expires.`);
+        }
+      }
     }
 
     // The only point at which a missing wallet is an error: relay was actually

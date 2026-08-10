@@ -40,6 +40,45 @@ describe("peardrop CLI", () => {
     });
   });
 
+  // peardrop#35: killing this process any way other than `peardrop cancel`
+  // left the Worker's tunnel record alive until TTL, so the drop page kept
+  // answering 200 with nothing behind it. A real SIGTERM-mid-session
+  // end-to-end test needs a DHT-receiver test double this suite doesn't have
+  // yet (the other `receive` tests below all fail fast at registration,
+  // before the DHT receiver ever starts) — verified live instead (kill a
+  // real `receive --relay` session, confirm its tunnel 404s afterward). This
+  // is the cheap structural guard against the fix's call being deleted or
+  // moved outside the signal-triggered path by accident.
+  describe("receive tears its own tunnel down on SIGINT/SIGTERM (peardrop#35)", () => {
+    const text = source("receive");
+
+    it("only issues the cancellation DELETE when a signal was actually received", () => {
+      const signalFlagSet = text.indexOf("signalReceived = true");
+      const finallyBlock = text.indexOf("} finally {");
+      const deleteCall = text.indexOf(`method: "DELETE"`);
+      expect(signalFlagSet).toBeGreaterThan(-1);
+      expect(finallyBlock).toBeGreaterThan(signalFlagSet);
+      expect(deleteCall).toBeGreaterThan(finallyBlock);
+      expect(text).toContain("if (signalReceived)");
+    });
+
+    it("cancels with the same tunnel id and owner token the session was created with", () => {
+      expect(text).toContain("`${workerUrl}/api/tunnels/${tunnelState.tunnelId}`");
+      expect(text).toContain("Authorization: `Bearer ${tunnelState.ownerToken}`");
+    });
+
+    it("doesn't let a failed cancellation call throw past process shutdown", () => {
+      // Best-effort: a network blip on the way out must not block the
+      // process from exiting, so the DELETE has to be wrapped, not awaited
+      // bare.
+      const deleteIndex = text.indexOf(`method: "DELETE"`);
+      const surroundingTry = text.lastIndexOf("try {", deleteIndex);
+      const surroundingCatch = text.indexOf("} catch", deleteIndex);
+      expect(surroundingTry).toBeGreaterThan(-1);
+      expect(surroundingCatch).toBeGreaterThan(deleteIndex);
+    });
+  });
+
   describe("receive defers wallet interaction", () => {
     const text = source("receive");
 
