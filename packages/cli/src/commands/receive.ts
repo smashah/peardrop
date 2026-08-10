@@ -349,10 +349,16 @@ export default class ReceiveCommand extends Command {
       abort.abort();
 
       if (signalReceived) {
+        // Best-effort means shutdown can't hang on it either — a stalled
+        // connection with no timeout would block the process from exiting
+        // just as badly as an unhandled failure would.
+        const cancelTimeout = new AbortController();
+        const cancelTimer = setTimeout(() => cancelTimeout.abort(), 5_000);
         try {
           const cancelled = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}`, {
             method: "DELETE",
             headers: { Authorization: `Bearer ${tunnelState.ownerToken}` },
+            signal: cancelTimeout.signal,
           });
           if (!cancelled.ok) {
             this.warn(`Tunnel cancellation on exit failed with HTTP ${cancelled.status} — the drop page may stay live until it expires.`);
@@ -360,6 +366,8 @@ export default class ReceiveCommand extends Command {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           this.warn(`Tunnel cancellation on exit failed (${message}) — the drop page may stay live until it expires.`);
+        } finally {
+          clearTimeout(cancelTimer);
         }
       }
     }
