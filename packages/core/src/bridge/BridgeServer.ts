@@ -9,7 +9,7 @@ import { DonePayloadSchema, FrameType, PdwpCodec, PdwpFrameParser } from "../pro
 import * as Schema from "effect/Schema";
 import { TransportError } from "../effect/errors.js";
 import { parseMultipartUpload, setSecureFileMode } from "./uploadParser.js";
-import { type DropSpec, isMasked } from "../spec/dropSpec.js";
+import { type DropSpec, groupSpecFields, isMasked } from "../spec/dropSpec.js";
 import { parseSpecUpload } from "./specUpload.js";
 import { runOnReceiveHook, type OnReceiveHookResult } from "../hooks/onReceive.js";
 
@@ -121,6 +121,21 @@ const DROP_PAGE_STYLES = `
     #status { margin-top: 1rem; min-height: 1.25rem; color: var(--text-muted); font: .8rem var(--mono); text-align: center; }
     #status.is-error { color: var(--danger); }
     #status.is-done { color: var(--text); font-weight: 500; }
+    /* Related fields rendered as one block instead of a flat list of boxes
+       (peardrop#34) — native <details>, open by default so nothing changes
+       visually for a spec with no groups. */
+    .spec-group { margin-top: 1.25rem; padding: .9rem .9rem .9rem .6rem; border: 1px solid var(--line-strong); }
+    .spec-group > .field { margin-top: .9rem; padding-left: 0; border-left: none; }
+    .spec-group-title { cursor: pointer; color: var(--text); font-size: .8rem; font-weight: 600; list-style: none; }
+    .spec-group-title::-webkit-details-marker { display: none; }
+    .spec-group-link { margin-top: .4rem; }
+    .field-scope { display: flex; flex-wrap: wrap; gap: .3rem; margin: .4rem 0; }
+    .scope-chip { padding: .15rem .5rem; border: 1px solid var(--line-strong); color: var(--text-muted); font: .7rem var(--mono); }
+    .field-shown-once { margin: .4rem 0; color: var(--danger); font-size: .75rem; }
+    .field-readonly-copy { display: flex; align-items: center; gap: .5rem; margin: .4rem 0; padding: .5rem .6rem; border: 1px solid var(--line); background: var(--surface-deep); }
+    .field-readonly-copy code { flex: 1; overflow-wrap: anywhere; color: var(--text); font-family: var(--mono); font-size: .78rem; }
+    .copy-button { flex: none; width: auto; margin-top: 0; padding: .3rem .6rem; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text-muted); font-size: .7rem; }
+    .copy-button:hover:not(:disabled) { color: var(--text); opacity: 1; border-color: var(--text); }
 `;
 
 export interface BridgeSink {
@@ -619,6 +634,36 @@ ${DROP_PAGE_STYLES}
 
   private serveSpecDropPage(res: ServerResponse, spec: DropSpec): void {
     const targetLabel = escapeHtml(this.targetPathLabel);
+    const toClientField = (field: DropSpec["fields"][number]) => ({
+      name: field.name,
+      type: field.type,
+      label: field.label ?? field.name,
+      description: field.description ?? "",
+      link: field.link ? { label: field.link.label ?? field.link.url, url: field.link.url } : null,
+      required: field.required,
+      masked: isMasked(field),
+      placeholder: field.placeholder ?? "",
+      minLength: field.minLength ?? null,
+      maxLength: field.maxLength ?? null,
+      format: field.format ?? null,
+      count: field.count ?? 1,
+      // Direction-reversed attributes (peardrop#34 addendum): these aren't
+      // inputs, they're values the recipient reads or carries TO the
+      // provider — rendered client-side as chips / read-only-plus-copy,
+      // never as a text input.
+      scope: field.scope ?? null,
+      entryUrl: field.entry_url ?? null,
+      resourceName: field.resource_name ?? null,
+      shownOnce: field.shown_once ?? false,
+    });
+
+    // groupSpecFields is the one shared partitioning function both this file
+    // and peardrop.fyi's SPA call — computed here, server-side, in real TS,
+    // rather than re-derived by the embedded client script, so the two
+    // renderers can't drift on WHICH fields belong to which group the way
+    // they already drifted on link rendering tonight (peardrop.fyi#104).
+    // Only the DOM construction for a section is client-side, same as every
+    // other field affordance in this file already is.
     const clientSpec = {
       title: spec.title ?? "PearDrop Drop Surface",
       description: spec.description ?? "",
@@ -627,19 +672,18 @@ ${DROP_PAGE_STYLES}
         success: spec.copy.success ?? "Delivered — you can close this tab.",
         failure: spec.copy.failure ?? "Submission failed — check the errors below and try again.",
       },
-      fields: spec.fields.map((field) => ({
-        name: field.name,
-        type: field.type,
-        label: field.label ?? field.name,
-        description: field.description ?? "",
-        link: field.link ? { label: field.link.label ?? field.link.url, url: field.link.url } : null,
-        required: field.required,
-        masked: isMasked(field),
-        placeholder: field.placeholder ?? "",
-        minLength: field.minLength ?? null,
-        maxLength: field.maxLength ?? null,
-        format: field.format ?? null,
-        count: field.count ?? 1,
+      fields: spec.fields.map(toClientField),
+      sections: groupSpecFields(spec).map((section) => ({
+        group: section.group
+          ? {
+              name: section.group.name,
+              title: section.group.title ?? section.group.name,
+              description: section.group.description ?? "",
+              link: section.group.link ? { label: section.group.link.label ?? section.group.link.url, url: section.group.link.url } : null,
+              allOrNothing: section.group.allOrNothing ?? false,
+            }
+          : null,
+        fields: section.fields.map(toClientField),
       })),
     };
 
@@ -722,7 +766,34 @@ ${DROP_PAGE_STYLES}
       if (lastIndex < text.length) container.appendChild(document.createTextNode(text.slice(lastIndex)));
     }
 
-    for (const field of spec.fields) {
+    // Copy-to-clipboard for a read-only value — scope, entry_url,
+    // resource_name are things a recipient carries TO the provider, not an
+    // input, so they render as text-plus-copy-button rather than a field
+    // (peardrop#34 addendum). Same affordance peardrop.fyi#112 built for
+    // secret-field reveal/copy, reimplemented here since this page has no
+    // shared runtime with that one — a copy button, not the grouping logic,
+    // is the only piece cheap enough to justify a second implementation.
+    function appendCopyButton(container, value, label) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'copy-button';
+      button.setAttribute('aria-label', 'Copy ' + label);
+      button.textContent = 'Copy';
+      button.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          button.textContent = 'Copied';
+          button.setAttribute('aria-label', 'Copied');
+          setTimeout(() => { button.textContent = 'Copy'; button.setAttribute('aria-label', 'Copy ' + label); }, 1500);
+        } catch (err) {
+          // Clipboard API can fail (permissions, insecure context) — the
+          // value is still visible and selectable, so this fails silently.
+        }
+      };
+      container.appendChild(button);
+    }
+
+    function buildFieldElement(field) {
       const wrap = document.createElement('div');
       wrap.className = 'field';
       const label = document.createElement('label');
@@ -734,6 +805,47 @@ ${DROP_PAGE_STYLES}
         desc.className = 'field-description';
         appendLinkified(desc, field.description);
         wrap.appendChild(desc);
+      }
+
+      if (field.shownOnce) {
+        const warning = document.createElement('p');
+        warning.className = 'field-shown-once';
+        warning.textContent = 'Shown only once by the provider — copy it now.';
+        wrap.appendChild(warning);
+      }
+
+      if (field.scope && field.scope.length > 0) {
+        const scopeList = document.createElement('div');
+        scopeList.className = 'field-scope';
+        for (const scopeName of field.scope) {
+          const chip = document.createElement('span');
+          chip.className = 'scope-chip';
+          chip.textContent = scopeName;
+          scopeList.appendChild(chip);
+        }
+        wrap.appendChild(scopeList);
+      }
+
+      // entry_url and resource_name flow the OPPOSITE direction from a
+      // normal field: the recipient reads/copies these, they don't type
+      // into them — read-only text plus a copy button, never an <input>.
+      if (field.entryUrl) {
+        const row = document.createElement('div');
+        row.className = 'field-readonly-copy';
+        const code = document.createElement('code');
+        code.textContent = field.entryUrl;
+        row.appendChild(code);
+        appendCopyButton(row, field.entryUrl, field.label + ' entry URL');
+        wrap.appendChild(row);
+      }
+      if (field.resourceName) {
+        const row = document.createElement('div');
+        row.className = 'field-readonly-copy';
+        const code = document.createElement('code');
+        code.textContent = field.resourceName;
+        row.appendChild(code);
+        appendCopyButton(row, field.resourceName, field.label + ' suggested name');
+        wrap.appendChild(row);
       }
 
       let input;
@@ -765,7 +877,50 @@ ${DROP_PAGE_STYLES}
       err.id = 'error-' + field.name;
       wrap.appendChild(err);
 
-      form.appendChild(wrap);
+      return wrap;
+    }
+
+    // Sections are pre-computed server-side by the real groupSpecFields()
+    // (packages/core/src/spec/dropSpec.ts) — this loop only builds DOM for
+    // what that function already decided, it never re-derives which fields
+    // belong to which group.
+    for (const section of spec.sections) {
+      if (section.group) {
+        const details = document.createElement('details');
+        details.className = 'spec-group';
+        details.open = true;
+        const summary = document.createElement('summary');
+        summary.className = 'spec-group-title';
+        summary.textContent = section.group.title;
+        details.appendChild(summary);
+
+        if (section.group.description) {
+          const groupDesc = document.createElement('p');
+          groupDesc.className = 'field-description';
+          appendLinkified(groupDesc, section.group.description);
+          details.appendChild(groupDesc);
+        }
+        if (section.group.allOrNothing) {
+          const note = document.createElement('p');
+          note.className = 'field-shown-once';
+          note.textContent = 'Needs every field in this group together — a partial submission won\'t be treated as complete.';
+          details.appendChild(note);
+        }
+        if (section.group.link) {
+          const groupLink = document.createElement('a');
+          groupLink.className = 'field-link spec-group-link';
+          groupLink.href = section.group.link.url;
+          groupLink.target = '_blank';
+          groupLink.rel = 'noopener noreferrer';
+          groupLink.textContent = section.group.link.label + ' ↗';
+          details.appendChild(groupLink);
+        }
+
+        for (const field of section.fields) details.appendChild(buildFieldElement(field));
+        form.appendChild(details);
+      } else {
+        for (const field of section.fields) form.appendChild(buildFieldElement(field));
+      }
     }
 
     async function sha256Hex(buf) {
