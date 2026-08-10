@@ -108,9 +108,23 @@ export const DEFAULT_VALIDATION_MESSAGES = {
 
 const isMasked = (field: FieldSpec): boolean => field.masked ?? (field.type === "secret" || field.type === "token");
 
-/** Shared https-only check for every link-shaped value in a spec — field.link, group.link, entry_url alike. */
+/**
+ * Shared https-only check for every link-shaped value in a spec — field.link,
+ * group.link, entry_url alike. Actually parses the URL rather than checking
+ * the string prefix (the original field.link check this was extracted from):
+ * a well-formed-looking prefix like "https:// evil.com" or "https://" alone
+ * isn't a URL a fetch/browser navigation could use, and `new URL` rejects it
+ * outright rather than letting a malformed value through under a scheme that
+ * merely starts with the right eight characters.
+ */
 const assertHttpsUrl = (url: string, context: string): void => {
-  if (!url.startsWith("https://")) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new DropSpecError({ message: `${context} must be a valid https:// URL — got "${url}"` });
+  }
+  if (parsed.protocol !== "https:") {
     throw new DropSpecError({ message: `${context} must be https:// — got "${url}"` });
   }
 };

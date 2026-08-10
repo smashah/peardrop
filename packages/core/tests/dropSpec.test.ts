@@ -405,6 +405,25 @@ describe("[[groups]] and field-direction attributes (peardrop#34)", () => {
     );
   });
 
+  it("rejects a value that merely starts with the https:// prefix without being a real URL", () => {
+    // "https:// evil.com" (an embedded space) and "https://" alone both start
+    // with the right 8 characters but aren't fetchable URLs — new URL()
+    // rejects both outright rather than letting a string-prefix check wave
+    // them through.
+    expect(() => decodeDropSpec({ fields: [{ name: "k", type: "secret", entry_url: "https://" }] })).toThrow(
+      /entry_url must be a valid https:\/\/ URL/
+    );
+    expect(() => decodeDropSpec({ fields: [{ name: "k", type: "secret", entry_url: "https:// evil.com" }] })).toThrow(
+      /entry_url must be a valid https:\/\/ URL/
+    );
+    expect(() =>
+      decodeDropSpec({
+        groups: [{ name: "g", link: { url: "https://" } }],
+        fields: [{ name: "k", type: "secret", group: "g" }],
+      })
+    ).toThrow(/link\.url must be a valid https:\/\/ URL/);
+  });
+
   it("accepts and round-trips scope, entry_url, resource_name, and shown_once", () => {
     const spec = decodeDropSpec({
       fields: [
