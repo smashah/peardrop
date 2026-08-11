@@ -1,0 +1,41 @@
+diff --git a/lib/handshake.js b/lib/handshake.js
+index e0d9f123c2ba6da81e6fe1322ad3d5cbfde3e2f5..1a5c7bcbef5f766521a6f7ebc509d01ad73ce834 100644
+--- a/lib/handshake.js
++++ b/lib/handshake.js
+@@ -59,6 +59,16 @@ function onComplete () {
+   this.holepunchSecret = buffer.allocUnsafe(32)
+ 
+   sodium.crypto_generichash(this.holepunchSecret, NS.PEER_HOLEPUNCH, hash)
++
++  // PATCH (peardrop#47) history: first attempt deleted this handshake from
++  // Node's `_handshakes` registry right here. Wrong — stream.js's own
++  // onOpen() legitimately looks this entry up AFTER completion (to read
++  // .hash/.tx/.rx and build the actual duplex stream) and deletes it
++  // itself once consumed. Deleting it here beat that read to the punch,
++  // causing "Cannot read properties of undefined (reading 'hash')" in
++  // onOpen — a real, different crash a live test caught before this
++  // shipped further. The registry entry has to survive until stream.js
++  // consumes it; the fix has to live in guarding re-entry instead (below).
+ }
+ 
+ function onNoise (payload) {
+@@ -101,9 +111,19 @@ function onNoise (payload) {
+ }
+ 
+ function onNoiseSend (message) {
++  // PATCH (peardrop#47): a duplicate/retransmitted message for a handshake
++  // that already finished (this.complete already true) re-enters the
++  // noise-handshake state machine after its pattern array is already
++  // empty — recv()/send() then throws "this.handshake.shift is not a
++  // function or its return value is not iterable" instead of being
++  // ignored. No-op here, at the re-entry point itself, rather than
++  // touching the `_handshakes` registry (see onComplete's own note above
++  // — stream.js still needs that entry to survive past completion).
++  if (this.complete) return
+   this._onNoise(this._handshake.send(message.payload))
+ }
+ 
+ function onNoiseReceive (message) {
++  if (this.complete) return
+   this._onNoise(this._handshake.recv(message.payload))
+ }
