@@ -236,10 +236,11 @@ export default class ReceiveCommand extends Command {
     // Below that threshold no wallet is loaded and the Worker is never asked
     // for payment requirements.
     let relayAuthorizationFailure: string | undefined;
-    const watchRelayOverage = async (): Promise<void> => {
-      if (!tunnelState.relayAllowed || !tunnelState.ownerToken) return;
+    let receiverRegistrationFailure: string | undefined;
+    const watchTunnelStatus = async (): Promise<void> => {
+      if (!tunnelState.ownerToken) return;
       let pollMs = RELAY_USAGE_POLL_MS;
-      while (!abort.signal.aborted && !relayAuthorizationFailure) {
+      while (!abort.signal.aborted && !relayAuthorizationFailure && !receiverRegistrationFailure) {
         await sleep(pollMs, abort.signal);
         if (abort.signal.aborted) return;
 
@@ -249,6 +250,13 @@ export default class ReceiveCommand extends Command {
             headers: { Authorization: `Bearer ${tunnelState.ownerToken}` },
             signal: abort.signal,
           });
+          if (status.status === 404 || status.status === 410) {
+            receiverRegistrationFailure =
+              `Receiver registration disappeared (HTTP ${status.status}); this drop link is no longer live. ` +
+              "Start peardrop receive again to create a new link.";
+            abort.abort();
+            return;
+          }
           if (!status.ok) continue;
           const body = (await status.json()) as { relayBytes?: number };
           relayBytes = typeof body.relayBytes === "number" ? body.relayBytes : 0;
@@ -256,7 +264,7 @@ export default class ReceiveCommand extends Command {
           continue;
         }
         pollMs = relayBytes > 0 ? RELAY_USAGE_POLL_MS : Math.min(pollMs * 2, RELAY_USAGE_POLL_MAX_MS);
-        if (!relayNeedsAuthorization(relayBytes)) continue;
+        if (!tunnelState.relayAllowed || !relayNeedsAuthorization(relayBytes)) continue;
 
         const authorization = await runEffect(
           Effect.exit(authorizeRelayOverage({ workerUrl, relayCapGb: flags["relay-cap"], relayBytes }))
@@ -295,7 +303,7 @@ export default class ReceiveCommand extends Command {
         return;
       }
     };
-    void watchRelayOverage().catch(() => undefined);
+    void watchTunnelStatus().catch(() => undefined);
 
     const sink = new DiskSink(flags.target);
 
@@ -342,7 +350,7 @@ export default class ReceiveCommand extends Command {
     } catch (error) {
       // An abort this command raised itself (relay overage with no wallet) is
       // reported below with an actionable message, not as a fiber interrupt.
-      if (!relayAuthorizationFailure) throw error;
+      if (!relayAuthorizationFailure && !receiverRegistrationFailure) throw error;
     } finally {
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
@@ -370,6 +378,10 @@ export default class ReceiveCommand extends Command {
           clearTimeout(cancelTimer);
         }
       }
+    }
+
+    if (receiverRegistrationFailure) {
+      return this.fail(receiverRegistrationFailure, flags.json);
     }
 
     // The only point at which a missing wallet is an error: relay was actually

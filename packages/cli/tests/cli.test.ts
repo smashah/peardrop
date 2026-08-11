@@ -106,6 +106,17 @@ describe("peardrop CLI", () => {
     });
   });
 
+  describe("receive reports control-plane registration loss", () => {
+    const text = source("receive");
+
+    it("stops waiting and emits an actionable error when its live tunnel disappears", () => {
+      expect(text).toContain("status.status === 404 || status.status === 410");
+      expect(text).toContain("Receiver registration disappeared");
+      expect(text).toContain("receiverRegistrationFailure");
+      expect(text).toContain("return this.fail(receiverRegistrationFailure, flags.json)");
+    });
+  });
+
   const runReceive = async (argv: string[]) => {
     const config = await Config.load(join(dirname(fileURLToPath(import.meta.url)), ".."));
     return ReceiveCommand.run(argv, config);
