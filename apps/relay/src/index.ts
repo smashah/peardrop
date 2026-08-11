@@ -38,6 +38,10 @@ export interface RelayServer {
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const WORKER_URL = (process.env.WORKER_URL || "https://peardrop.fyi").replace(/\/$/, "");
+// Fly auto-injects both — FLY_ALLOC_ID identifies this specific machine
+// instance, FLY_REGION is the region it's running in (iad/ord). See
+// peardrop#49's diagnostic log lines below.
+const MACHINE_ID = `${process.env.FLY_REGION || "?"}:${(process.env.FLY_ALLOC_ID || "local").slice(0, 8)}`;
 
 function requireEnv(name: string): string {
   const val = process.env[name];
@@ -162,6 +166,16 @@ export function startRelayServer(): RelayServer {
     }
 
     usedTickets.set(ticketParam, claims.exp);
+    // DIAGNOSTIC (peardrop#49): a real ~25% of connections hang silently
+    // after "relay WS open" with no error and no server-side log trace at
+    // all. This app runs two Fly machines (iad, ord) with zero shared state
+    // (activeSessionsPerSlug/Ip are per-process Maps) — one live hypothesis
+    // is that whichever machine actually accepts a given WS connection
+    // matters. MACHINE_ID (Fly auto-injects FLY_ALLOC_ID) tags every accept
+    // so a real trial batch can show whether hangs correlate with a
+    // particular machine or with mismatched machines across a slug's
+    // sender/receiver connections. Remove once #49 has a diagnosis.
+    process.stdout.write(`[accept] slug=${claims.slug} machine=${MACHINE_ID}\n`);
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit("connection", ws, request, claims, remoteAddress);
     });
@@ -169,6 +183,7 @@ export function startRelayServer(): RelayServer {
 
   wss.on("connection", (ws: WebSocket, _req: IncomingMessage, claims: RelayTicketClaims, remoteAddress: string) => {
     const { slug, capBytes } = claims;
+    process.stdout.write(`[connection] slug=${slug} machine=${MACHINE_ID}\n`);
     activeSessionsPerSlug.set(slug, (activeSessionsPerSlug.get(slug) || 0) + 1);
     activeSessionsPerIp.set(remoteAddress, (activeSessionsPerIp.get(remoteAddress) || 0) + 1);
 
