@@ -11,6 +11,7 @@ const allowedFiles = new Set([
   "LICENSE",
   "README.md",
   "docs/RELEASING.md",
+  "fly.toml",
   "infra/relay/Dockerfile",
   "infra/relay/compose.yaml",
   "package.json",
@@ -23,7 +24,7 @@ const allowedFiles = new Set([
   "tsconfig.json",
   "turbo.json",
 ]);
-const allowedPrefixes = [".bumpy/", ".github/workflows/", "apps/relay/", "packages/cli/", "packages/core/"];
+const allowedPrefixes = [".bumpy/", ".github/workflows/", "apps/relay/", "packages/cli/", "packages/core/", "patches/"];
 const forbiddenText = [
   "@peardrop/" + "mcp",
   "../" + "mcp",
