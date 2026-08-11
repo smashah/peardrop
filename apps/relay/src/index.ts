@@ -1,7 +1,21 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import DHT from "hyperdht";
-import relay from "@hyperswarm/dht-relay";
+// dht-relay's runtime shape is CJS: module.exports = Node (the client CLASS)
+// with the relay-side entry attached as module.exports.relay. Its .d.ts only
+// declares the default export, so a named import fails typecheck — and a bare
+// default import resolves to the class, which when called as a function threw
+// "Class constructor Node cannot be invoked without 'new'" on every WS
+// connection, crashing the whole process mid-upgrade (2026-08-11 incident).
+import DhtRelayDefault from "@hyperswarm/dht-relay";
+const relay = (DhtRelayDefault as unknown as {
+  relay: (dht: unknown, stream: unknown) => void;
+}).relay;
+if (typeof relay !== "function") {
+  // Fail at boot, not per-connection: a silent API drift here previously took
+  // down the process on the first real user connection instead of on deploy.
+  throw new Error("@hyperswarm/dht-relay no longer exposes .relay on its default export — API drift, fix the interop before serving");
+}
 import Stream from "@hyperswarm/dht-relay/ws";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
