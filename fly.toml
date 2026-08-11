@@ -1,0 +1,12 @@
+# peardrop-relay — Fly app config (repo root = build context; monorepo Dockerfile)
+# Deploy procedure (flyctl `deploy` panics on this app — recorded 2026-08-10):
+#   flyctl deploy --build-only --push --remote-only   # build + push image
+#   flyctl machine update <machine-id> --image <ref> --yes   # per machine, iad then ord
+app = "peardrop-relay"
+primary_region = "iad"
+
+[build]
+  dockerfile = "infra/relay/Dockerfile"
+
+[env]
+  PORT = "8080"
