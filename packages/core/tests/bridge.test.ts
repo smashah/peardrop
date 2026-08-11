@@ -159,6 +159,20 @@ describe("BridgeServer local drop URL (#16)", () => {
 });
 
 describe("BridgeServer spec drop page — bare URLs linkify, hostile strings stay inert", () => {
+  it("emits syntactically valid client JavaScript", async () => {
+    const spec = decodeDropSpec({
+      fields: [{ name: "value", type: "secret" }],
+    });
+
+    await withSpecBridge(spec, async ({ port, slug }) => {
+      const page = await rawRequest(port, `/${slug}`);
+      const clientScript = page.body.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+
+      expect(clientScript).toBeDefined();
+      expect(() => new Function(clientScript!)).not.toThrow();
+    });
+  });
+
   it("turns a bare https URL in the top-level description, the request copy, and a field description into a real anchor tag", async () => {
     const spec = decodeDropSpec({
       description: "Grab the deploy key from https://console.example.com/keys first.",
