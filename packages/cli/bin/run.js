@@ -1,4 +1,7 @@
 #!/usr/bin/env node
-import { execute } from "@oclif/core";
+import { flush, handle, run } from "@oclif/core";
+import { normalizeCliArgv } from "../dist/argv.js";
 
-await execute({ dir: import.meta.url });
+await run(normalizeCliArgv(process.argv.slice(2)), import.meta.url)
+  .catch(async (error) => handle(error))
+  .finally(async () => flush());

@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import ReceiveCommand from "../src/commands/receive.js";
 
-const commandsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "commands");
+const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+const repoDir = join(packageDir, "..", "..");
+const commandsDir = join(packageDir, "src", "commands");
 const source = (command: string) => readFileSync(join(commandsDir, `${command}.ts`), "utf8");
 
 /** Anything that can load a wallet key or start a payment round-trip. */
@@ -38,6 +40,42 @@ describe("peardrop CLI", () => {
       expect(text).not.toContain("allow-relay");
       expect(text).not.toContain("relay-cap");
     });
+  });
+
+  it("does not ask senders to configure a relay URL because relay is automatic", () => {
+    expect(source("send")).not.toContain("relay: Flags.string");
+  });
+
+  it("reports connection and delivery events in JSON mode", () => {
+    const text = source("receive");
+    expect(text).toContain('event: "session"');
+    expect(text).toContain("relayFallbackAllowed: tunnelState.relayAllowed");
+    expect(text).toContain("selectedTransport: null");
+    expect(text).toContain('event: "connected"');
+    expect(text).toContain('event: "delivered"');
+  });
+
+  it("labels relay as fallback permission and exposes direct transport timings", () => {
+    expect(source("receive")).toContain("Relay fallback:");
+    expect(source("receive")).not.toContain("Relay path:");
+    expect(source("send")).toContain("transport=${dhtSender.details.transport}");
+    expect(source("send")).toContain("dhtConnectMs=${dhtSender.details.dhtConnectMs}");
+    expect(source("send")).toContain("transferMs=${transferMs}");
+  });
+
+  it("keeps active operator instructions pinned to the explicit latest CLI", () => {
+    const instructionPaths = [
+      join(repoDir, "README.md"),
+      join(repoDir, "AGENT_INSTRUCTIONS.md"),
+      join(repoDir, "skills", "peardrop", "SKILL.md"),
+      join(packageDir, "README.md"),
+      join(repoDir, "packages", "core", "src", "payments", "x402Wallet.node.ts"),
+    ];
+    for (const path of instructionPaths) {
+      const text = readFileSync(path, "utf8");
+      expect(text).not.toMatch(/npx\s+@peardrop\/cli(?:\s|$)/);
+      expect(text).not.toMatch(/^peardrop\s+(?:receive|send|local|cancel|status|wallet)\b/gm);
+    }
   });
 
   // peardrop#35: killing this process any way other than `peardrop cancel`

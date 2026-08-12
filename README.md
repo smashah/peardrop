@@ -35,11 +35,12 @@ pnpm run package:smoke
 ## CLI
 
 ```bash
-npx @peardrop/cli receive --target ./inbox
-npx @peardrop/cli send https://peardrop.fyi/<slug> ./file.zip
+npx --yes @peardrop/cli@latest receive --target ./inbox
+npx --yes @peardrop/cli@latest <slug> "text to send"
+npx --yes @peardrop/cli@latest send <slug> ./file.zip
 ```
 
-Direct transfers use HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path.
+Relay fallback is automatic; no sender relay flag or URL is required. Pass `--no-relay` to `receive` when you explicitly want a direct-only session. Direct transfers use HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path.
 
 ## Relay
 

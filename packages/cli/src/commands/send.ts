@@ -3,6 +3,7 @@ import { BridgeServer, PdwpSink, connectDhtSender, runEffect } from "@peardrop/c
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { open as openFile } from "node:fs/promises";
+import { performance } from "node:perf_hooks";
 import * as Effect from "effect/Effect";
 import open from "open";
 
@@ -20,11 +21,11 @@ export default class SendCommand extends Command {
     browser: Flags.boolean({ char: "b", description: "Open local bridge UI in browser (Mode 1)" }),
     text: Flags.string({ description: "Text/secret to send" }),
     pin: Flags.string({ description: "Receiver PIN when the tunnel requires one" }),
-    relay: Flags.string({ description: "Custom relay URL override" }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
   };
 
   public async run(): Promise<void> {
+    const startedAt = performance.now();
     const { args, flags } = await this.parse(SendCommand);
 
     const slug = args.targetUrl.includes("/") ? args.targetUrl.split("/").pop()! : args.targetUrl;
@@ -37,6 +38,8 @@ export default class SendCommand extends Command {
       },
       catch: () => new Error("Tunnel descriptor unavailable"),
     }).pipe(Effect.orElseSucceed(() => null)));
+    const descriptorCompletedAt = performance.now();
+    const descriptorMs = Math.round(descriptorCompletedAt - startedAt);
 
     if (flags.browser || (!args.files && !flags.text)) {
       if (!descriptor?.publicKey) {
@@ -110,7 +113,15 @@ export default class SendCommand extends Command {
             }
           } else if (content) digest.update(content);
           const sha256 = digest.digest("hex");
+          const prepareMs = Math.round(performance.now() - descriptorCompletedAt);
           const dhtSender = yield* connectDhtSender({ publicKeyHex: publicKey });
+          const endpoint = dhtSender.details.remoteHost && dhtSender.details.remotePort
+            ? ` endpoint=${dhtSender.details.remoteHost}:${dhtSender.details.remotePort}`
+            : "";
+          command.log(
+            `Connected — transport=${dhtSender.details.transport}${endpoint} peer=${dhtSender.details.remotePublicKey} dhtConnectMs=${dhtSender.details.dhtConnectMs}`
+          );
+          const transferStartedAt = performance.now();
           const sink = new PdwpSink(dhtSender.socket, flags.pin);
           yield* Effect.tryPromise({ try: () => sink.onStart("files", [{ name, bytes: totalBytes, sha256 }]), catch: () => new Error("Receiver did not accept the PDWP manifest") });
           if (content) {
@@ -128,7 +139,11 @@ export default class SendCommand extends Command {
           }
           yield* Effect.tryPromise({ try: () => sink.onFileEnd(0, sha256), catch: () => new Error("PDWP file finalization failed") });
           const received = yield* Effect.tryPromise({ try: () => sink.onDone(), catch: () => new Error("Receiver did not acknowledge delivery") });
-          command.log(`Delivered ${received.length} file(s) after receiver confirmation.`);
+          const transferMs = Math.round(performance.now() - transferStartedAt);
+          const totalMs = Math.round(performance.now() - startedAt);
+          command.log(
+            `Delivered ${received.length} file(s) after receiver confirmation — descriptorMs=${descriptorMs} prepareMs=${prepareMs} dhtConnectMs=${dhtSender.details.dhtConnectMs} transferMs=${transferMs} totalMs=${totalMs}.`
+          );
         })
       )
     );

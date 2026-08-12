@@ -196,7 +196,12 @@ export default class ReceiveCommand extends Command {
     if (flags.json) {
       // Single-line, compact and flushed so a piped consumer can read one line
       // and parse the Drop URL immediately, the same way `local --json` does.
-      await writeStdout(JSON.stringify(tunnelState));
+      await writeStdout(JSON.stringify({
+        ...tunnelState,
+        event: "session",
+        relayFallbackAllowed: tunnelState.relayAllowed,
+        selectedTransport: null,
+      }));
     } else {
       this.log("\n=========================================");
       this.log(` PearDrop Receiver Active`);
@@ -206,7 +211,7 @@ export default class ReceiveCommand extends Command {
       this.log(` Target path: ${flags.target}`);
       const freeTierMB = RELAY_FREE_TIER_BYTES / (1024 * 1024);
       this.log(
-        ` Relay path: ${tunnelState.relayAllowed ? `Enabled (free up to ${freeTierMB}MB, then metered — max $0.06)` : "Disabled (Direct-only)"}`
+        ` Relay fallback: ${tunnelState.relayAllowed ? `Allowed (free up to ${freeTierMB}MB, then metered — max $0.06)` : "Disallowed (Direct-only)"}`
       );
       this.log("=========================================\n");
       this.log("Waiting for sender connection...");
@@ -308,8 +313,16 @@ export default class ReceiveCommand extends Command {
           pin: pinCode,
           maxFiles: flags.files,
           maxBytes: flags["max-size"] ? flags["max-size"] * 1024 * 1024 : undefined,
-          onConnected: () => {
-            if (!flags.json) this.log("Sender connected — receiving payload...");
+          onConnected: async (details) => {
+            if (flags.json) {
+              await writeStdout(JSON.stringify({ mode: "remote", event: "connected", ...details }));
+              return;
+            }
+            const endpoint = details.remoteHost && details.remotePort ? ` endpoint=${details.remoteHost}:${details.remotePort}` : "";
+            const peer = details.remotePublicKey ? ` peer=${details.remotePublicKey}` : "";
+            this.log(
+              `Sender connected — transport=${details.transport}${endpoint}${peer} files=${details.fileCount} bytes=${details.totalBytes}; receiving payload...`
+            );
           },
           onDelivered: async (files) => {
             await runEffect(updateSessionStatus(tunnelState.tunnelId, "waiting", {
@@ -323,8 +336,6 @@ export default class ReceiveCommand extends Command {
               throw new Error(`Worker delivery confirmation failed with HTTP ${consumption.status}`);
             }
             await runEffect(updateSessionStatus(tunnelState.tunnelId, "delivered"));
-            if (!flags.json) this.log("Payload delivered successfully.");
-
             // Side effect only: a failing hook is reported, never rolled back into
             // the delivery that already completed above.
             if (onReceiveCommand) {
@@ -334,6 +345,11 @@ export default class ReceiveCommand extends Command {
                 files: files as ReadonlyArray<{ name: string; path?: string }>,
               });
               if (!flags.json) this.log(`on_receive hook: ${hook.ok ? "ok" : `failed (${hook.error ?? `exit ${hook.exitCode ?? hook.signal}`})`}`);
+            }
+            if (flags.json) {
+              await writeStdout(JSON.stringify({ mode: "remote", event: "delivered", files }));
+            } else {
+              this.log("Payload delivered successfully; receiver exiting.");
             }
           },
         })),
