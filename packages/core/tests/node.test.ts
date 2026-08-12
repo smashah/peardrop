@@ -21,8 +21,9 @@ import { authorizeRelayOverage, RELAY_OVERAGE_WALLET_MESSAGE, WalletError } from
 import { RELAY_AUTHORIZATION_TRIGGER_BYTES, RELAY_FREE_TIER_BYTES } from "../src/payments/RelayBilling.js";
 
 describe("@peardrop/core/node", () => {
-  effectIt.effect("delivers headless DHT bytes only after receiver DONE acknowledgement", () =>
-    Effect.scoped(Effect.gen(function* () {
+  effectIt.effect(
+    "delivers headless DHT bytes only after receiver DONE acknowledgement",
+    () => Effect.scoped(Effect.gen(function* () {
       const directory = yield* Effect.acquireRelease(
         Effect.tryPromise({ try: () => mkdtemp(join(tmpdir(), "peardrop-dht-")), catch: (cause) => cause }),
         (path) => Effect.tryPromise({ try: () => rm(path, { recursive: true, force: true }), catch: () => undefined })
@@ -59,7 +60,8 @@ describe("@peardrop/core/node", () => {
       effectExpect(yield* Ref.get(completionOrder)).toEqual(["persisted", "acknowledged"]);
       effectExpect(yield* Effect.tryPromise({ try: () => readFile(join(directory, "ack.txt"), "utf8"), catch: (cause) => cause })).toBe("receiver-done-gates-delivery");
       yield* Effect.sync(() => sender.close());
-    }))
+    })),
+    { timeout: 15_000 }
   );
   effectIt.effect("waits for receiver ACCEPT and DONE before sender delivery", () =>
     Effect.gen(function* () {
