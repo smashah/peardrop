@@ -8,6 +8,13 @@
 
 
 
+
+## 1.5.1
+<sub>2026-08-12</sub>
+
+- [#53](https://github.com/smashah/peardrop/pull/53) [`705379f`](https://github.com/smashah/peardrop/commit/705379f2a236482c4db1076effee0b9246a9dbb1)  *(patch)*
+  `peardrop local --spec` now emits its browser program through a raw template and executes that program in regression coverage, proving three fields and their links render. Previously template-literal escaping corrupted the inline script, leaving a 200 page with no fields and no usable submit action.
+
 ## 1.5.0
 <sub>2026-08-10</sub>
 
