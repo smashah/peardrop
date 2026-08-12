@@ -10,7 +10,13 @@ const temporaryPaths: string[] = [];
 const exists = async (path: string) => stat(path).then(() => true, () => false);
 
 const startConsumedWorker = async () => {
-  const server = createServer((_request, response) => {
+  const requests: Array<{ method: string; url: string; authorization?: string }> = [];
+  const server = createServer((request, response) => {
+    requests.push({
+      method: request.method ?? "GET",
+      url: request.url ?? "/",
+      ...(request.headers.authorization === undefined ? {} : { authorization: request.headers.authorization }),
+    });
     response.writeHead(404).end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -18,6 +24,7 @@ const startConsumedWorker = async () => {
   if (!address || typeof address === "string") throw new Error("Test Worker did not bind a TCP port");
   return {
     url: `http://127.0.0.1:${address.port}`,
+    requests,
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
 };
@@ -44,6 +51,10 @@ if (args[0] === "receive") {
   await writeFile(join(root, "ack"), "ok");
   console.log(JSON.stringify({ event: "teardown", phase: "teardown", status: "complete" }));
 } else {
+  if (!args.includes("--relay") || !args.includes("--non-custodial-only")) {
+    console.log(JSON.stringify({ event: "error", phase: "argv", status: "failed", error: "Relay force flags missing" }));
+    process.exit(2);
+  }
   const payload = args[args.indexOf("--text") + 1];
   console.log(JSON.stringify({ event: "relay", phase: "ticket-request", status: "complete", attempt: 1, mode: "non-custodial", transport: "relay" }));
   console.error("[relay] elapsedMs=2 pid=" + process.pid + " phase=dht-connect attempt=1 mode=non-custodial transport=relay status=complete");
@@ -69,6 +80,10 @@ if (args[0] === "receive") {
   setInterval(() => undefined, 1000);
   await new Promise(() => undefined);
 } else {
+  if (!args.includes("--relay") || !args.includes("--non-custodial-only")) {
+    console.log(JSON.stringify({ event: "error", phase: "argv", status: "failed", error: "Relay force flags missing" }));
+    process.exit(2);
+  }
   console.log(JSON.stringify({ event: "error", phase: "dht-connect", status: "failed", transport: "relay", error: "synthetic failure" }));
   console.log(JSON.stringify({ event: "relay", phase: "teardown", status: "complete", transport: "relay" }));
   process.exit(1);
@@ -146,6 +161,11 @@ describe("test nc diagnostic safety", () => {
         else throw cause;
       }
       expect(failure?.summary.phase).toBe("dht-connect");
+      expect(worker.requests).toContainEqual({
+        method: "DELETE",
+        url: "/api/tunnels/test-drop",
+        authorization: "Bearer owner-secret",
+      });
       expect(await exists(join(fixtureRoot, "receiver-cancelled"))).toBe(true);
       expect(failure?.summary.artifactPath).toBeDefined();
       const artifact = await readFile(failure!.summary.artifactPath!, "utf8");
