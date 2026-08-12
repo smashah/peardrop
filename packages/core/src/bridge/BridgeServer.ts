@@ -748,7 +748,7 @@ ${DROP_PAGE_STYLES}
     }
 
     function appendLinkified(container, text) {
-      const urlPattern = /\bhttps?:\/\/[^\s<>"']+/g;
+      const urlPattern = /\\bhttps?:\\/\\/[^\\s<>"']+/g;
       let lastIndex = 0;
       let match;
       while ((match = urlPattern.exec(text)) !== null) {
@@ -903,7 +903,7 @@ ${DROP_PAGE_STYLES}
         if (section.group.allOrNothing) {
           const note = document.createElement('p');
           note.className = 'field-shown-once';
-          note.textContent = 'Needs every field in this group together — a partial submission won\'t be treated as complete.';
+          note.textContent = 'Needs every field in this group together — a partial submission won\\'t be treated as complete.';
           details.appendChild(note);
         }
         if (section.group.link) {
