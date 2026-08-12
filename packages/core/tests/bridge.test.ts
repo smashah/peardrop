@@ -14,6 +14,68 @@ interface RawResponse {
   body: string;
 }
 
+class RuntimeElement {
+  readonly children: RuntimeElement[] = [];
+  readonly attributes = new Map<string, string>();
+  className = "";
+  disabled = false;
+  href = "";
+  id = "";
+  multiple = false;
+  onchange: unknown;
+  onclick: unknown;
+  open = false;
+  placeholder = "";
+  rel = "";
+  target = "";
+  textContent = "";
+  type = "";
+  value = "";
+
+  constructor(readonly tagName: string) {}
+
+  appendChild(child: RuntimeElement): RuntimeElement {
+    this.children.push(child);
+    return child;
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+}
+
+class RuntimeDocument {
+  private readonly elements = new Map<string, RuntimeElement>();
+
+  register(id: string, element: RuntimeElement): RuntimeElement {
+    element.id = id;
+    this.elements.set(id, element);
+    return element;
+  }
+
+  createElement(tagName: string): RuntimeElement {
+    return new RuntimeElement(tagName);
+  }
+
+  createTextNode(text: string): RuntimeElement {
+    const node = new RuntimeElement("#text");
+    node.textContent = text;
+    return node;
+  }
+
+  getElementById(id: string): RuntimeElement | null {
+    return this.elements.get(id) ?? null;
+  }
+
+  querySelectorAll(): RuntimeElement[] {
+    return [];
+  }
+}
+
+function descendants(root: RuntimeElement): RuntimeElement[] {
+  return root.children.flatMap((child) => [child, ...descendants(child)]);
+}
+
 /**
  * node:http rather than fetch: the Host-header cases below need to send a Host
  * that undici refuses to let a caller set.
@@ -170,6 +232,56 @@ describe("BridgeServer spec drop page — bare URLs linkify, hostile strings sta
 
       expect(clientScript).toBeDefined();
       expect(() => new Function(clientScript!)).not.toThrow();
+    });
+  });
+
+  it("executes the emitted client JavaScript and renders three fields plus their links", async () => {
+    const spec = decodeDropSpec({
+      fields: [
+        {
+          name: "api_key",
+          type: "secret",
+          description: "Create it at https://console.example.com/keys.",
+        },
+        {
+          name: "client_id",
+          type: "text",
+          link: { label: "Find client ID", url: "https://docs.example.com/client-id" },
+        },
+        { name: "account_name", type: "text" },
+      ],
+    });
+
+    await withSpecBridge(spec, async ({ port, slug }) => {
+      const page = await rawRequest(port, `/${slug}`);
+      const clientScript = page.body.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+      const specJson = page.body.match(/<script id="peardrop-spec" type="application\/json">([\s\S]*?)<\/script>/)?.[1];
+      const tokenJson = page.body.match(/<script id="peardrop-token" type="application\/json">([\s\S]*?)<\/script>/)?.[1];
+
+      expect(clientScript).toBeDefined();
+      expect(specJson).toBeDefined();
+      expect(tokenJson).toBeDefined();
+
+      const document = new RuntimeDocument();
+      const form = document.register("drop-form", new RuntimeElement("form"));
+      document.register("send-btn", new RuntimeElement("button"));
+      document.register("status", new RuntimeElement("div"));
+      document.register("peardrop-spec", Object.assign(new RuntimeElement("script"), { textContent: specJson! }));
+      document.register("peardrop-token", Object.assign(new RuntimeElement("script"), { textContent: tokenJson! }));
+
+      const execute = new Function("document", "navigator", clientScript!) as (
+        document: RuntimeDocument,
+        navigator: { clipboard: { writeText(value: string): Promise<void> } }
+      ) => void;
+      execute(document, { clipboard: { writeText: async () => undefined } });
+
+      const rendered = descendants(form);
+      expect(rendered.filter((element) => element.className === "field")).toHaveLength(3);
+      expect(rendered.filter((element) => element.tagName === "input")).toHaveLength(3);
+      expect(rendered.filter((element) => element.tagName === "a").map((element) => element.href)).toEqual([
+        "https://console.example.com/keys",
+        "https://docs.example.com/client-id",
+      ]);
     });
   });
 
