@@ -131,8 +131,21 @@ jobs:
           VERSION: ${{ steps.relay.outputs.version }}
         run: |
           set -euo pipefail
-          test "$(npm view "@peardrop/core@$VERSION" version)" = "$VERSION"
-          test "$(npm view "@peardrop/cli@$VERSION" version)" = "$VERSION"
+          verify_package() {
+            package=$1
+            for attempt in 1 2 3 4 5; do
+              if published_version=$(npm view "$package@$VERSION" version 2>/dev/null) && [ "$published_version" = "$VERSION" ]; then
+                return 0
+              fi
+              if [ "$attempt" -lt 5 ]; then
+                sleep 3
+              fi
+            done
+            echo "$package@$VERSION did not become visible after 5 attempts" >&2
+            return 1
+          }
+          verify_package @peardrop/core
+          verify_package @peardrop/cli
       - name: Verify GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
