@@ -454,8 +454,9 @@ const attemptTransfer = (
   for (const [fileIndex, file] of request.files.entries()) {
     const reader = file.stream().getReader();
     let offset = 0;
+    let readCompleted = false;
     yield* report(context, { phase: "bytes", status: "progress", fileIndex, bytesSent: 0, totalBytes: file.size });
-    try {
+    yield* Effect.gen(function* () {
       while (true) {
         const next = yield* Effect.tryPromise({
           try: () => reader.read(),
@@ -469,9 +470,16 @@ const attemptTransfer = (
           yield* report(context, { phase: "bytes", status: "progress", fileIndex, bytesSent: offset, totalBytes: file.size });
         }
       }
-    } finally {
-      reader.releaseLock();
-    }
+      readCompleted = true;
+    }).pipe(Effect.ensuring(Effect.gen(function* () {
+      if (!readCompleted) {
+        yield* Effect.tryPromise({
+          try: () => reader.cancel("Relay transfer stopped before the input stream completed"),
+          catch: () => undefined,
+        }).pipe(Effect.ignore);
+      }
+      yield* Effect.sync(() => reader.releaseLock());
+    })));
     if (offset !== manifests[fileIndex]?.bytes) {
       return yield* Effect.fail(failure("bytes", `${file.name} changed while sending`, false));
     }

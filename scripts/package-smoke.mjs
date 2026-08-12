@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { extname, relative, resolve } from "node:path";
 
@@ -109,6 +109,18 @@ const importCore = spawnSync(
 if (importCore.status !== 0) {
   process.stderr.write(importCore.stderr || importCore.stdout);
   process.exit(importCore.status ?? 1);
+}
+
+const browserEntry = resolve(installDirectory, "browser-relay-entry.mjs");
+await writeFile(browserEntry, 'export { sendRelay } from "@peardrop/core/relay";\n');
+const bundleRelay = spawnSync(
+  resolve(root, "packages/cli/node_modules/.bin/esbuild"),
+  [browserEntry, "--bundle", "--platform=browser", "--format=esm", `--outfile=${resolve(installDirectory, "browser-relay-bundle.mjs")}`],
+  { cwd: root, encoding: "utf8" },
+);
+if (bundleRelay.status !== 0) {
+  process.stderr.write(bundleRelay.stderr || bundleRelay.stdout);
+  process.exit(bundleRelay.status ?? 1);
 }
 
 process.stdout.write(`Package install and smoke check passed: ${archives.join(", ")}\n`);

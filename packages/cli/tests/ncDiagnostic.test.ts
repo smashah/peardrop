@@ -31,7 +31,7 @@ const startConsumedWorker = async () => {
 
 const successFixture = String.raw`
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url));
@@ -58,7 +58,8 @@ if (args[0] === "receive") {
   const payload = args[args.indexOf("--text") + 1];
   console.log(JSON.stringify({ event: "relay", phase: "ticket-request", status: "complete", attempt: 1, mode: "non-custodial", transport: "relay" }));
   console.error("[relay] elapsedMs=2 pid=" + process.pid + " phase=dht-connect attempt=1 mode=non-custodial transport=relay status=complete");
-  await writeFile(join(root, "payload"), payload);
+  await writeFile(join(root, "payload.tmp"), payload);
+  await rename(join(root, "payload.tmp"), join(root, "payload"));
   await waitFor(join(root, "ack"));
   console.log(JSON.stringify({ event: "delivered", phase: "done", transport: "relay", mode: "non-custodial" }));
 }
@@ -171,6 +172,8 @@ describe("test nc diagnostic safety", () => {
       const artifact = await readFile(failure!.summary.artifactPath!, "utf8");
       expect(artifact).toContain('"phase":"dht-connect"');
       expect(artifact).not.toContain("owner-secret");
+      const artifactEvents = artifact.trim().split("\n").map((line) => JSON.parse(line) as { data: { event?: string; status?: string } });
+      expect(artifactEvents.at(-1)?.data).toMatchObject({ event: "summary", status: "failed" });
       await rm(failure!.summary.artifactPath!, { force: true });
     } finally {
       await worker.close();

@@ -5,9 +5,11 @@ import * as Effect from "effect/Effect";
 const writes: Uint8Array[] = [];
 const custodialModes: boolean[] = [];
 let rejectNonCustodial = false;
-let closeDuringBackpressure = false;
+let closeDuringBackpressureType: number | undefined;
 let dhtDestroyCount = 0;
 let webSocketCloseCount = 0;
+let streamCancelCount = 0;
+let streamInvocationCount = 0;
 let deliveredFiles = [{ name: "message.txt", bytes: 5, sha256: "abc" }];
 
 vi.mock("@hyperswarm/dht-relay/ws", () => ({ default: class RelayStream {} }));
@@ -28,7 +30,7 @@ vi.mock("@hyperswarm/dht-relay", () => ({
       peer.write = (frame) => {
         writes.push(frame);
         const type = frame[4];
-        if (closeDuringBackpressure && type === 1) {
+        if (closeDuringBackpressureType === type) {
           queueMicrotask(() => peer.emit("close"));
           return false;
         }
@@ -79,8 +81,12 @@ const file = {
   size: 5,
   stream: () => new ReadableStream<Uint8Array>({
     start(controller) {
+      streamInvocationCount += 1;
       controller.enqueue(new TextEncoder().encode("hello"));
-      controller.close();
+      if (closeDuringBackpressureType === undefined || streamInvocationCount === 1) controller.close();
+    },
+    cancel() {
+      streamCancelCount += 1;
     },
   }),
 };
@@ -102,9 +108,11 @@ beforeEach(() => {
   writes.length = 0;
   custodialModes.length = 0;
   rejectNonCustodial = false;
-  closeDuringBackpressure = false;
+  closeDuringBackpressureType = undefined;
   dhtDestroyCount = 0;
   webSocketCloseCount = 0;
+  streamCancelCount = 0;
+  streamInvocationCount = 0;
   deliveredFiles = [{ name: "message.txt", bytes: 5, sha256: "abc" }];
 });
 
@@ -178,10 +186,11 @@ describe("shared Relay sender", () => {
     expect(exit._tag).toBe("Failure");
     expect(webSocketCloseCount).toBeGreaterThan(0);
     expect(dhtDestroyCount).toBeGreaterThan(0);
+    expect(streamCancelCount).toBe(0);
   });
 
   it("fails a backpressured write when the peer closes instead of hanging", async () => {
-    closeDuringBackpressure = true;
+    closeDuringBackpressureType = 4;
     const exit = await Effect.runPromiseExit(Effect.scoped(sendRelay({
       descriptor,
       files: [file],
@@ -190,8 +199,9 @@ describe("shared Relay sender", () => {
     }, adapters)));
 
     expect(exit._tag).toBe("Failure");
-    expect(String(exit)).toContain("HELLO");
+    expect(String(exit)).toContain("Could not send");
     expect(webSocketCloseCount).toBeGreaterThan(0);
     expect(dhtDestroyCount).toBeGreaterThan(0);
+    expect(streamCancelCount).toBe(1);
   });
 });

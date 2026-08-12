@@ -155,6 +155,7 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
   let senderExitCode: number | undefined;
   let receiverExitCode: number | undefined;
   let abortFailure: DiagnosticFailure | undefined;
+  let failureSummary: NcDiagnosticSummary | undefined;
 
   const record = (source: DiagnosticSource, channel: "stdout" | "stderr" | "internal", pid: number, value: unknown) => {
     const sanitized = redactDiagnosticValue(value);
@@ -322,7 +323,7 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
       artifactPath,
       error: failure.message,
     };
-    record("harness", "internal", process.pid, summary);
+    failureSummary = summary;
     throw new NcDiagnosticError(summary);
   } finally {
     clearTimeout(timeout);
@@ -356,6 +357,7 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
     }
     await Promise.all([terminateChild(sender), terminateChild(receiver, 6_000)]);
     await rm(temporaryRoot, { recursive: true, force: true });
+    if (failureSummary) record("harness", "internal", process.pid, failureSummary);
     await artifactWrites;
     if (succeeded) await rm(artifactPath, { force: true });
   }

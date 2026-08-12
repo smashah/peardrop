@@ -67,7 +67,7 @@ importers:
     dependencies:
       '@hyperswarm/dht-relay':
         specifier: 'catalog:'
-        version: 0.4.3(patch_hash=dbab100bd531693404c8f5c9489baa0a71dd9c82dd954024c00d0a4a9fbc9f28)(bare-events@2.9.1)(bare-url@2.4.7)
+        version: 0.4.3(patch_hash=dbab100bd531693404c8f5c9489baa0a71dd9c82dd954024c00d0a4a9fbc9f28)(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       '@peardrop/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -76,7 +76,7 @@ importers:
         version: 4.0.0-beta.94
       hyperdht:
         specifier: 'catalog:'
-        version: 6.33.0(bare-url@2.4.7)
+        version: 6.33.0(bare-url@2.4.7)(sodium-javascript@0.8.0)
       ws:
         specifier: 'catalog:'
         version: 8.21.0
@@ -98,7 +98,7 @@ importers:
     dependencies:
       '@hyperswarm/dht-relay':
         specifier: ^0.4.3
-        version: 0.4.3(patch_hash=dbab100bd531693404c8f5c9489baa0a71dd9c82dd954024c00d0a4a9fbc9f28)(bare-events@2.9.1)(bare-url@2.4.7)
+        version: 0.4.3(patch_hash=dbab100bd531693404c8f5c9489baa0a71dd9c82dd954024c00d0a4a9fbc9f28)(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       '@noble/hashes':
         specifier: 1.7.1
         version: 1.7.1
@@ -116,7 +116,7 @@ importers:
         version: 4.0.0-beta.94
       hyperdht:
         specifier: ^6.16.1
-        version: 6.33.0(bare-url@2.4.7)
+        version: 6.33.0(bare-url@2.4.7)(sodium-javascript@0.8.0)
       open:
         specifier: ^10.1.0
         version: 10.2.0
@@ -150,7 +150,7 @@ importers:
     dependencies:
       '@hyperswarm/dht-relay':
         specifier: 'catalog:'
-        version: 0.4.3(patch_hash=dbab100bd531693404c8f5c9489baa0a71dd9c82dd954024c00d0a4a9fbc9f28)(bare-events@2.9.1)(bare-url@2.4.7)
+        version: 0.4.3(patch_hash=dbab100bd531693404c8f5c9489baa0a71dd9c82dd954024c00d0a4a9fbc9f28)(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       '@noble/hashes':
         specifier: 1.7.1
         version: 1.7.1
@@ -165,10 +165,13 @@ importers:
         version: 4.0.0-beta.94
       hyperdht:
         specifier: 'catalog:'
-        version: 6.33.0(bare-url@2.4.7)
+        version: 6.33.0(bare-url@2.4.7)(sodium-javascript@0.8.0)
       smol-toml:
         specifier: 1.7.1
         version: 1.7.1
+      sodium-javascript:
+        specifier: 0.8.0
+        version: 0.8.0
       viem:
         specifier: 2.55.10
         version: 2.55.10(typescript@5.9.3)(zod@3.25.76)
@@ -921,6 +924,12 @@ packages:
   bits-to-bytes@1.3.0:
     resolution: {integrity: sha512-OJoHTpFXS9bXHBCekGTByf3MqM8CGblBDIduKQeeVVeiU9dDWywSSirXIBYGgg3d1zbVuvnMa1vD4r6PA0kOKg==}
 
+  blake2b-wasm@2.4.0:
+    resolution: {integrity: sha512-S1kwmW2ZhZFFFOghcx73+ZajEfKBqhP82JMssxtLVMxlaPea1p9uoLiUZ5WYyHn0KddwbLc+0vh4wR0KBNoT5w==}
+
+  blake2b@2.1.4:
+    resolution: {integrity: sha512-AyBuuJNI64gIvwx13qiICz6H6hpmjvYS5DGkG6jbXMOT8Z3WUJ3V1X0FlhIoT1b/5JtHE3ki+xjtMvu1nn+t9A==}
+
   blind-relay@1.6.1:
     resolution: {integrity: sha512-38YmKCl/m9NcTkwueBbcGIt9Zx3IT/Q9Nsluu6C5Gur6PqfE0zWPhPwCzia1hri/g0ICYxrqkgLtEaoWD5WeSQ==}
 
@@ -940,6 +949,9 @@ packages:
   bundle-name@4.1.0:
     resolution: {integrity: sha512-tjwM5exMg6BGRI+kNmTntNsvdZS1X8BFYS6tnJ2hdH0kVxM6/eVZ2xy+FqStSWvYmtfFMDLIxurorHwDKfDz5Q==}
     engines: {node: '>=18'}
+
+  chacha20-universal@1.0.4:
+    resolution: {integrity: sha512-/IOxdWWNa7nRabfe7+oF+jVkGjlr2xUL4J8l/OvzZhj+c9RpMqoo3Dq+5nU1j/BflRV4BKnaQ4+4oH1yBpQG1Q==}
 
   chai@6.2.2:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
@@ -1475,6 +1487,18 @@ packages:
   set-cookie-parser@3.1.2:
     resolution: {integrity: sha512-5/r/lTwbJ3zQ+qwdUFZYeRNqda7P5HD8zQKqlSjdGt1/S0cjLAphHusj4Y58ahDtWn/g32xrIS58/ikOvwl0Lw==}
 
+  sha256-universal@1.2.1:
+    resolution: {integrity: sha512-ghn3muhdn1ailCQqqceNxRgkOeZSVfSE13RQWEg6njB+itsFzGVSJv+O//2hvNXZuxVIRyNzrgsZ37SPDdGJJw==}
+
+  sha256-wasm@2.2.2:
+    resolution: {integrity: sha512-qKSGARvao+JQlFiA+sjJZhJ/61gmW/3aNLblB2rsgIxDlDxsJPHo8a1seXj12oKtuHVgJSJJ7QEGBUYQN741lQ==}
+
+  sha512-universal@1.2.1:
+    resolution: {integrity: sha512-kehYuigMoRkIngCv7rhgruLJNNHDnitGTBdkcYbCbooL8Cidj/bS78MDxByIjcc69M915WxcQTgZetZ1JbeQTQ==}
+
+  sha512-wasm@2.3.4:
+    resolution: {integrity: sha512-akWoxJPGCB3aZCrZ+fm6VIFhJ/p8idBv7AWGFng/CZIrQo51oQNsvDbTSRXWAzIiZJvpy16oIDiCCPqTe21sKg==}
+
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
 
@@ -1485,9 +1509,15 @@ packages:
   signal-promise@1.0.3:
     resolution: {integrity: sha512-WBgv0UnIq2C+Aeh0/n+IRpP6967eIx9WpynTUoiW3isPpfe1zu2LJzyfXdo9Tgef8yR/sGjcMvoUXD7EYdiz+g==}
 
+  siphash24@1.3.1:
+    resolution: {integrity: sha512-moemC3ZKiTzH29nbFo3Iw8fbemWWod4vNs/WgKbQ54oEs6mE6XVlguxvinYjB+UmaE0PThgyED9fUkWvirT8hA==}
+
   smol-toml@1.7.1:
     resolution: {integrity: sha512-PPlsspAZ4jbMBu5DMFhfUGDQLu/vrL4SyBROVS37x8ynnVmFIs1VPBz1Co8Xks3TvpIaZXmU85y4DrQ+UyVFoQ==}
     engines: {node: '>= 18'}
+
+  sodium-javascript@0.8.0:
+    resolution: {integrity: sha512-rEBzR5mPxPES+UjyMDvKPIXy9ImF17KOJ32nJNi9uIquWpS/nfj+h6m05J5yLJaGXjgM72LmQoUbWZVxh/rmGg==}
 
   sodium-native@4.3.3:
     resolution: {integrity: sha512-OnxSlN3uyY8D0EsLHpmm2HOFmKddQVvEMmsakCrXUzSd8kjjbzL413t4ZNF3n0UxSwNgwTyUvkmZHTfuCeiYSw==}
@@ -1811,6 +1841,9 @@ packages:
   xmlchars@2.2.0:
     resolution: {integrity: sha512-JZnDKK8B0RCDw84FNdDAIpZK+JuJw+s7Lz8nksI7SIuU3UXJJslUthsi+uWBUYOwPFwW7W7PRLRfUKpxjtjFCw==}
 
+  xsalsa20@1.2.0:
+    resolution: {integrity: sha512-FIr/DEeoHfj7ftfylnoFt3rAIRoWXpx2AoDfrT2qD2wtp7Dp+COajvs/Icb7uHqRW9m60f5iXZwdsJJO3kvb7w==}
+
   y18n@5.0.8:
     resolution: {integrity: sha512-0pfFzegeDWJHJIAmTLRP2DwHjdF5s7jo9tuztdQxAhINCdvS+3nGINqPd00AphqJR/0LhANUS6/+7SCb98YOfA==}
     engines: {node: '>=10'}
@@ -1990,19 +2023,19 @@ snapshots:
       '@noble/hashes': 2.2.0
     optional: true
 
-  '@hyperswarm/dht-relay@0.4.3(patch_hash=dbab100bd531693404c8f5c9489baa0a71dd9c82dd954024c00d0a4a9fbc9f28)(bare-events@2.9.1)(bare-url@2.4.7)':
+  '@hyperswarm/dht-relay@0.4.3(patch_hash=dbab100bd531693404c8f5c9489baa0a71dd9c82dd954024c00d0a4a9fbc9f28)(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)':
     dependencies:
-      '@hyperswarm/secret-stream': 6.9.1(bare-events@2.9.1)(bare-url@2.4.7)
+      '@hyperswarm/secret-stream': 6.9.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       b4a: 1.8.1
       compact-encoding: 2.19.2
       compact-encoding-net: 1.3.0
       events: 3.3.0
       graceful-goodbye: 1.3.3
-      hyperdht: 6.33.0(bare-url@2.4.7)
-      noise-handshake: 3.1.0(bare-url@2.4.7)
+      hyperdht: 6.33.0(bare-url@2.4.7)(sodium-javascript@0.8.0)
+      noise-handshake: 3.1.0(bare-url@2.4.7)(sodium-javascript@0.8.0)
       protomux: 3.11.0
       safety-catch: 1.0.3
-      sodium-universal: 4.0.1(bare-url@2.4.7)
+      sodium-universal: 4.0.1(bare-url@2.4.7)(sodium-javascript@0.8.0)
       streamx: 2.28.0
       timeout-refresh: 2.0.1
       ws: 8.21.0
@@ -2016,14 +2049,14 @@ snapshots:
       - sodium-javascript
       - utf-8-validate
 
-  '@hyperswarm/secret-stream@6.9.1(bare-events@2.9.1)(bare-url@2.4.7)':
+  '@hyperswarm/secret-stream@6.9.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)':
     dependencies:
       b4a: 1.8.1
-      hypercore-crypto: 3.7.0(bare-events@2.9.1)(bare-url@2.4.7)
-      noise-curve-ed: 2.1.0(bare-events@2.9.1)(bare-url@2.4.7)
-      noise-handshake: 4.2.0(bare-events@2.9.1)(bare-url@2.4.7)
-      sodium-secretstream: 1.2.0(bare-events@2.9.1)(bare-url@2.4.7)
-      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)
+      hypercore-crypto: 3.7.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
+      noise-curve-ed: 2.1.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
+      noise-handshake: 4.2.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
+      sodium-secretstream: 1.2.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
+      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       streamx: 2.28.0
       timeout-refresh: 2.0.1
       unslab: 1.3.0
@@ -2513,7 +2546,21 @@ snapshots:
     transitivePeerDependencies:
       - react-native-b4a
 
-  blind-relay@1.6.1(bare-url@2.4.7):
+  blake2b-wasm@2.4.0:
+    dependencies:
+      b4a: 1.8.1
+      nanoassert: 2.0.0
+    transitivePeerDependencies:
+      - react-native-b4a
+
+  blake2b@2.1.4:
+    dependencies:
+      blake2b-wasm: 2.4.0
+      nanoassert: 2.0.0
+    transitivePeerDependencies:
+      - react-native-b4a
+
+  blind-relay@1.6.1(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
       b4a: 1.8.1
       bare-events: 2.9.1
@@ -2521,7 +2568,7 @@ snapshots:
       compact-encoding: 3.3.0
       compact-encoding-bitfield: 1.1.0
       protomux: 3.11.0
-      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)
+      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       streamx: 2.28.0
     transitivePeerDependencies:
       - bare-abort-controller
@@ -2551,6 +2598,10 @@ snapshots:
   bundle-name@4.1.0:
     dependencies:
       run-applescript: 7.1.0
+
+  chacha20-universal@1.0.4:
+    dependencies:
+      nanoassert: 2.0.0
 
   chai@6.2.2: {}
 
@@ -2650,7 +2701,7 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
-  dht-rpc@6.27.0(bare-url@2.4.7):
+  dht-rpc@6.27.0(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
       adaptive-timeout: 1.0.1
       b4a: 1.8.1
@@ -2660,7 +2711,7 @@ snapshots:
       fast-fifo: 1.3.2
       kademlia-routing-table: 1.0.6
       nat-sampler: 1.0.1
-      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)
+      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       streamx: 2.28.0
       time-ordered-set: 2.0.1
       udx-native: 1.20.7(bare-url@2.4.7)
@@ -2822,11 +2873,11 @@ snapshots:
       - '@noble/hashes'
     optional: true
 
-  hypercore-crypto@3.7.0(bare-events@2.9.1)(bare-url@2.4.7):
+  hypercore-crypto@3.7.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
       b4a: 1.8.1
       compact-encoding: 3.3.0
-      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)
+      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
     transitivePeerDependencies:
       - bare-abort-controller
       - bare-buffer
@@ -2851,24 +2902,24 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  hyperdht@6.33.0(bare-url@2.4.7):
+  hyperdht@6.33.0(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
-      '@hyperswarm/secret-stream': 6.9.1(bare-events@2.9.1)(bare-url@2.4.7)
+      '@hyperswarm/secret-stream': 6.9.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       b4a: 1.8.1
       bare-events: 2.9.1
-      blind-relay: 1.6.1(bare-url@2.4.7)
+      blind-relay: 1.6.1(bare-url@2.4.7)(sodium-javascript@0.8.0)
       bogon: 1.3.0
       compact-encoding: 3.3.0
-      dht-rpc: 6.27.0(bare-url@2.4.7)
-      hypercore-crypto: 3.7.0(bare-events@2.9.1)(bare-url@2.4.7)
+      dht-rpc: 6.27.0(bare-url@2.4.7)(sodium-javascript@0.8.0)
+      hypercore-crypto: 3.7.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       hypercore-id-encoding: 1.3.0
       hyperdht-address: 1.1.1
-      noise-curve-ed: 2.1.0(bare-events@2.9.1)(bare-url@2.4.7)
-      noise-handshake: 4.2.0(bare-events@2.9.1)(bare-url@2.4.7)
+      noise-curve-ed: 2.1.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
+      noise-handshake: 4.2.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       record-cache: 1.2.0
       safety-catch: 1.0.3
       signal-promise: 1.0.3
-      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)
+      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
       streamx: 2.28.0
       unslab: 1.3.0
       xache: 1.3.0
@@ -3124,11 +3175,11 @@ snapshots:
       detect-libc: 2.1.2
     optional: true
 
-  noise-curve-ed@2.1.0(bare-events@2.9.1)(bare-url@2.4.7):
+  noise-curve-ed@2.1.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
       b4a: 1.8.1
       nanoassert: 2.0.0
-      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)
+      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
     transitivePeerDependencies:
       - bare-abort-controller
       - bare-buffer
@@ -3137,21 +3188,21 @@ snapshots:
       - react-native-b4a
       - sodium-javascript
 
-  noise-handshake@3.1.0(bare-url@2.4.7):
+  noise-handshake@3.1.0(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
       b4a: 1.8.1
       nanoassert: 2.0.0
-      sodium-universal: 4.0.1(bare-url@2.4.7)
+      sodium-universal: 4.0.1(bare-url@2.4.7)(sodium-javascript@0.8.0)
     transitivePeerDependencies:
       - bare-url
       - react-native-b4a
       - sodium-javascript
 
-  noise-handshake@4.2.0(bare-events@2.9.1)(bare-url@2.4.7):
+  noise-handshake@4.2.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
       b4a: 1.8.1
       nanoassert: 2.0.0
-      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)
+      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
     transitivePeerDependencies:
       - bare-abort-controller
       - bare-buffer
@@ -3279,6 +3330,34 @@ snapshots:
   set-cookie-parser@3.1.2:
     optional: true
 
+  sha256-universal@1.2.1:
+    dependencies:
+      b4a: 1.8.1
+      sha256-wasm: 2.2.2
+    transitivePeerDependencies:
+      - react-native-b4a
+
+  sha256-wasm@2.2.2:
+    dependencies:
+      b4a: 1.8.1
+      nanoassert: 2.0.0
+    transitivePeerDependencies:
+      - react-native-b4a
+
+  sha512-universal@1.2.1:
+    dependencies:
+      b4a: 1.8.1
+      sha512-wasm: 2.3.4
+    transitivePeerDependencies:
+      - react-native-b4a
+
+  sha512-wasm@2.3.4:
+    dependencies:
+      b4a: 1.8.1
+      nanoassert: 2.0.0
+    transitivePeerDependencies:
+      - react-native-b4a
+
   siginfo@2.0.0: {}
 
   signal-exit@4.1.0:
@@ -3286,7 +3365,23 @@ snapshots:
 
   signal-promise@1.0.3: {}
 
+  siphash24@1.3.1:
+    dependencies:
+      nanoassert: 2.0.0
+
   smol-toml@1.7.1: {}
+
+  sodium-javascript@0.8.0:
+    dependencies:
+      blake2b: 2.1.4
+      chacha20-universal: 1.0.4
+      nanoassert: 2.0.0
+      sha256-universal: 1.2.1
+      sha512-universal: 1.2.1
+      siphash24: 1.3.1
+      xsalsa20: 1.2.0
+    transitivePeerDependencies:
+      - react-native-b4a
 
   sodium-native@4.3.3(bare-url@2.4.7):
     dependencies:
@@ -3306,10 +3401,10 @@ snapshots:
       - bare-url
       - react-native-b4a
 
-  sodium-secretstream@1.2.0(bare-events@2.9.1)(bare-url@2.4.7):
+  sodium-secretstream@1.2.0(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
       b4a: 1.8.1
-      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)
+      sodium-universal: 5.0.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0)
     transitivePeerDependencies:
       - bare-abort-controller
       - bare-buffer
@@ -3318,15 +3413,19 @@ snapshots:
       - react-native-b4a
       - sodium-javascript
 
-  sodium-universal@4.0.1(bare-url@2.4.7):
+  sodium-universal@4.0.1(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
       sodium-native: 4.3.3(bare-url@2.4.7)
+    optionalDependencies:
+      sodium-javascript: 0.8.0
     transitivePeerDependencies:
       - bare-url
 
-  sodium-universal@5.0.1(bare-events@2.9.1)(bare-url@2.4.7):
+  sodium-universal@5.0.1(bare-events@2.9.1)(bare-url@2.4.7)(sodium-javascript@0.8.0):
     dependencies:
       sodium-native: 5.1.0(bare-events@2.9.1)(bare-url@2.4.7)
+    optionalDependencies:
+      sodium-javascript: 0.8.0
     transitivePeerDependencies:
       - bare-abort-controller
       - bare-buffer
@@ -3644,6 +3743,8 @@ snapshots:
 
   xmlchars@2.2.0:
     optional: true
+
+  xsalsa20@1.2.0: {}
 
   y18n@5.0.8:
     optional: true
