@@ -687,7 +687,12 @@ ${DROP_PAGE_STYLES}
       })),
     };
 
-    const html = `<!DOCTYPE html>
+    // Keep the embedded browser program byte-for-byte readable as JavaScript.
+    // A normal template literal consumes backslashes before the browser sees
+    // them, which previously turned regex escapes such as `\/` and `\s` into
+    // a malformed expression. String.raw makes the source below the emitted
+    // source, so adding another regex cannot silently recreate that failure.
+    const html = String.raw`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -748,7 +753,7 @@ ${DROP_PAGE_STYLES}
     }
 
     function appendLinkified(container, text) {
-      const urlPattern = /\\bhttps?:\\/\\/[^\\s<>"']+/g;
+      const urlPattern = /\bhttps?:\/\/[^\s<>"']+/g;
       let lastIndex = 0;
       let match;
       while ((match = urlPattern.exec(text)) !== null) {
@@ -903,7 +908,7 @@ ${DROP_PAGE_STYLES}
         if (section.group.allOrNothing) {
           const note = document.createElement('p');
           note.className = 'field-shown-once';
-          note.textContent = 'Needs every field in this group together — a partial submission won\\'t be treated as complete.';
+          note.textContent = "Needs every field in this group together — a partial submission won't be treated as complete.";
           details.appendChild(note);
         }
         if (section.group.link) {
