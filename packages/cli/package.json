@@ -1,6 +1,6 @@
 {
   "name": "@peardrop/cli",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "PearDrop CLI: Secure, ephemeral file/secret drops for agents and humans",
   "license": "MIT",
   "repository": {
