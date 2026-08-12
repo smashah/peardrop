@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import { DiskSink, PdwpSink } from "../src/bridge/BridgeServer.js";
 import { connectDhtSender, createKeyPair, runDhtReceiver } from "../src/dht/DhtTransport.js";
@@ -31,21 +32,27 @@ describe("@peardrop/core/node", () => {
       const ready = yield* Deferred.make<void>();
       const delivered = yield* Deferred.make<ReadonlyArray<unknown>>();
       const completionOrder = yield* Ref.make<ReadonlyArray<string>>([]);
-      const abort = new AbortController();
+      let connectionDetails: unknown;
       const keyPair = createKeyPair(Buffer.alloc(32, 7));
-      yield* runDhtReceiver({
+      const receiver = yield* runDhtReceiver({
         keyPair,
         sink: new DiskSink(`${directory}/`),
-        signal: abort.signal,
         onReady: () => Effect.runFork(Deferred.succeed(ready, undefined)),
+        onConnected: (details) => {
+          connectionDetails = details;
+        },
         onDelivered: async (files) => {
           await Effect.runPromise(Ref.update(completionOrder, (events) => [...events, "persisted"]));
-          abort.abort();
           await Effect.runPromise(Deferred.succeed(delivered, files));
         },
       }).pipe(Effect.forkChild);
       yield* Deferred.await(ready);
       const sender = yield* connectDhtSender({ publicKeyHex: keyPair.publicKeyHex });
+      effectExpect(sender.details).toMatchObject({
+        transport: "hyperdht",
+        dhtConnectMs: expect.any(Number),
+        remotePublicKey: keyPair.publicKeyHex,
+      });
       sender.socket.on("error", () => undefined);
       const content = Buffer.from("receiver-done-gates-delivery");
       const sha256 = createHash("sha256").update(content).digest("hex");
@@ -58,8 +65,15 @@ describe("@peardrop/core/node", () => {
       effectExpect(acknowledged).toHaveLength(1);
       effectExpect(yield* Deferred.await(delivered)).toHaveLength(1);
       effectExpect(yield* Ref.get(completionOrder)).toEqual(["persisted", "acknowledged"]);
+      effectExpect(connectionDetails).toMatchObject({
+        transport: "hyperdht",
+        fileCount: 1,
+        totalBytes: content.length,
+        remotePublicKey: expect.any(String),
+      });
       effectExpect(yield* Effect.tryPromise({ try: () => readFile(join(directory, "ack.txt"), "utf8"), catch: (cause) => cause })).toBe("receiver-done-gates-delivery");
       yield* Effect.sync(() => sender.close());
+      yield* Fiber.join(receiver).pipe(Effect.timeout("1 second"));
     })),
     { timeout: 15_000 }
   );
@@ -171,9 +185,9 @@ describe("@peardrop/core/node", () => {
         authorizeRelayOverage({ workerUrl: "https://peardrop.fyi", relayCapGb: 2, relayBytes: RELAY_FREE_TIER_BYTES + 1 })
       );
       expect(Exit.isFailure(exit)).toBe(true);
-      expect(RELAY_OVERAGE_WALLET_MESSAGE).toContain("peardrop wallet configure");
+      expect(RELAY_OVERAGE_WALLET_MESSAGE).toContain("npx --yes @peardrop/cli@latest wallet configure");
       expect(RELAY_OVERAGE_WALLET_MESSAGE).toContain("5MB");
-      expect(String(exit)).toContain("peardrop wallet configure");
+      expect(String(exit)).toContain("npx --yes @peardrop/cli@latest wallet configure");
       // The missing wallet is caught before any payment round-trip is made.
       expect(fetchSpy).not.toHaveBeenCalled();
     });

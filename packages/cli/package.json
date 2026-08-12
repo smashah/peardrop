@@ -27,11 +27,13 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p ../core && tsc -p tsconfig.build.json && esbuild src/index.ts src/commands/*.ts --bundle --platform=node --format=esm --target=node20 --outdir=dist --alias:@peardrop/core/node=../core/src/node.ts --alias:@peardrop/core=../core/src/index.ts --external:@oclif/core --external:@x402/core --external:@x402/core/* --external:@x402/evm --external:@x402/evm/* --external:effect --external:effect/* --external:hyperdht --external:open --external:viem --external:viem/* --external:zod",
+    "build": "tsc -p ../core && tsc -p tsconfig.build.json && esbuild src/index.ts src/commands/*.ts src/commands/test/*.ts --bundle --platform=node --format=esm --target=node20 --outdir=dist --alias:@peardrop/core/relay=../core/src/relay.ts --alias:@peardrop/core/node=../core/src/node.ts --alias:@peardrop/core=../core/src/index.ts --external:@hyperswarm/dht-relay --external:@hyperswarm/dht-relay/* --external:@noble/hashes --external:@noble/hashes/* --external:@oclif/core --external:@x402/core --external:@x402/core/* --external:@x402/evm --external:@x402/evm/* --external:effect --external:effect/* --external:hyperdht --external:open --external:viem --external:viem/* --external:ws --external:zod",
     "check-types": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
+    "@hyperswarm/dht-relay": "^0.4.3",
+    "@noble/hashes": "1.7.1",
     "@oclif/core": "^4.2.14",
     "@x402/core": "2.21.0",
     "@x402/evm": "2.21.0",
@@ -39,10 +41,12 @@
     "hyperdht": "^6.16.1",
     "open": "^10.1.0",
     "viem": "2.55.10",
+    "ws": "^8.18.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/ws": "^8.5.14",
     "esbuild": "^0.28.1",
     "typescript": "catalog:",
     "vitest": "catalog:"

@@ -1,36 +1,49 @@
 # PearDrop CLI
 
-PearDrop creates short-lived, end-to-end encrypted file and secret drops over HyperDHT Noise connections.
+PearDrop creates short-lived file and secret drops. Direct CLI transfers are end-to-end encrypted over HyperDHT Noise connections; Relay transfers report whether they used non-custodial forwarding or custodial fallback.
 
 ```bash
-npx @peardrop/cli receive --target ./inbox
-npx @peardrop/cli send https://peardrop.fyi/silent-moss-7f2 ./file.zip
+npx --yes @peardrop/cli@latest receive --target ./inbox
+npx --yes @peardrop/cli@latest silent-moss-7f2 "text to send"
+npx --yes @peardrop/cli@latest send silent-moss-7f2 ./file.zip
+npx --yes @peardrop/cli@latest test nc
 ```
 
-Drop links are two words and a short code — `silent-moss-7f2` — so they survive being read aloud or typed from a phone. The slug names a drop; it never authorizes one. `peardrop local` serves its page on `http://127.0.0.1:<port>/<slug>` while uploads are still gated on a single-use token the page holds, and remote tunnels are still gated on their owner token.
+Drop links are two words and a short code — `silent-moss-7f2` — so they survive being read aloud or typed from a phone. The slug names a drop; it never authorizes one. The `local` command serves its page on `http://127.0.0.1:<port>/<slug>` while uploads are still gated on a single-use token the page holds, and remote tunnels are still gated on their owner token.
 
 The receiver prints a shareable URL and keeps the private key on the receiving machine. Direct transfers are free, and so are the first 5MB of any relayed transfer; only relay usage past that free tier is metered.
 
-No wallet and no flags are needed to run `peardrop receive`. Relay is the default path: when a direct connection is impossible, PearDrop relays automatically. Pass `--no-relay` to stay direct-only. Enabling relay never loads a wallet or contacts the payment facilitator on its own — the wallet is used lazily, only once direct P2P did not carry the transfer and relayed bytes trend over the free 5MB tier. At that point, an unconfigured wallet is reported with an actionable message instead of failing the session up front.
+No wallet and no flags are needed to run `receive`. Relay fallback is allowed by default, while the actual transport is reported when a sender connects. Pass `--no-relay` to stay direct-only. Enabling relay never loads a wallet or contacts the payment facilitator on its own — the wallet is used lazily, only once direct P2P did not carry the transfer and relayed bytes trend over the free 5MB tier. At that point, an unconfigured wallet is reported with an actionable message instead of failing the session up front.
 
-`--json` prints one compact JSON line per event on stdout: the session (with the drop URL) once the receiver is live, or `{"mode":"remote","event":"error","error":"…"}` with a non-zero exit if the session cannot start. Every line is flushed as it is written, so a piped agent reads it immediately.
+Force the hosted WebSocket Relay transport from the CLI with either a text payload or a file:
+
+```bash
+npx --yes @peardrop/cli@latest send silent-moss-7f2 --relay --text "text to send"
+npx --yes @peardrop/cli@latest send silent-moss-7f2 --relay ./file.zip
+```
+
+The forced Relay sender uses the same state machine as the hosted web sender: non-custodial WebSocket-to-HyperDHT first, with custodial forwarding only as a fallback. Add `--verbose` for elapsed phase diagnostics on stderr or `--json` for structured lifecycle events on stdout.
+
+`npx --yes @peardrop/cli@latest test nc` is the production non-custodial diagnostic. It creates a disposable receiver, forces Relay with custodial fallback disabled, verifies byte-for-byte delivery and clean receiver exit, confirms the tunnel was consumed, and deletes its temporary data. Its default timeout is 30 seconds; override it with a bounded duration such as `--timeout 1m`, and add `--json` for stable machine-readable events and the final summary.
+
+`--json` prints one compact JSON line per event on stdout: the session (with the drop URL and relay fallback permission), the accepted connection's actual transport details, and the delivered file metadata. A startup failure emits `{"mode":"remote","event":"error","error":"…"}` and exits non-zero. Every line is flushed as it is written, and a successful one-time receiver exits after its delivery acknowledgement is flushed. Direct CLI sends also report descriptor lookup, payload preparation, DHT connection, transfer, and total timings so network discovery time is visible instead of being folded into one delivery duration.
 
 To pay for relay usage above the free tier, configure a local Base wallet:
 
 ```bash
-peardrop wallet configure 0xYOUR_PRIVATE_KEY
-peardrop wallet status
+npx --yes @peardrop/cli@latest wallet configure 0xYOUR_PRIVATE_KEY
+npx --yes @peardrop/cli@latest wallet status
 ```
 
 The private key is stored locally with mode `0600` and is redacted from command output. When production facilitator discovery does not report compatible Base mainnet support, PearDrop stays direct-only.
 
 ## TOML drop-page specs
 
-`peardrop local` renders a fixed single-paste page by default. Pass `--spec <file.toml>` or `--spec-inline '<toml>'` to shape the page instead: multiple named fields, per-field validation, and copy overrides. A malformed or invalid spec fails immediately with a clear error and a non-zero exit code — no server is started.
+The `local` command renders a fixed single-paste page by default. Pass `--spec <file.toml>` or `--spec-inline '<toml>'` to shape the page instead: multiple named fields, per-field validation, and copy overrides. A malformed or invalid spec fails immediately with a clear error and a non-zero exit code — no server is started.
 
 ```bash
-peardrop local --target ./inbox/ --spec ./drop.toml
-peardrop local --target ./inbox/ --spec-inline 'title = "Drop your key"
+npx --yes @peardrop/cli@latest local --target ./inbox/ --spec ./drop.toml
+npx --yes @peardrop/cli@latest local --target ./inbox/ --spec-inline 'title = "Drop your key"
 
 [[fields]]
 name = "api_key"
@@ -76,13 +89,13 @@ message = "Custom error"    # optional — overrides every default validation me
 
 **Description and link text — both render markdown, not plain text.** The top-level `description`, `copy.request`, and each field's own `description` all support markdown (headings, lists, bold, inline code, links) and auto-linkify a bare `http://`/`https://` URL even without markdown link syntax — you don't need `[text](url)` for a URL to become clickable, just write it in prose. Raw HTML is stripped, not rendered, so this is safe for untrusted spec text. `link` (the structured field above) is a separate, distinct affordance — it always renders as its own clickable button, has a required `https://` scheme, and is meant for "the one place to go for this," while a `description` with a URL in it is meant for "here's some context, which happens to include a link." Use whichever affordance fits the sentence you're writing, or both.
 
-**Quantity:** a page can declare any number of `[[fields]]`. A spec that can produce more than one delivered file (more than one field, or a single `file` field with `count > 1`) requires a directory target (`--target` ending in `/`) — `peardrop local` checks this before starting the server.
+**Quantity:** a page can declare any number of `[[fields]]`. A spec that can produce more than one delivered file (more than one field, or a single `file` field with `count > 1`) requires a directory target (`--target` ending in `/`) — the `local` command checks this before starting the server.
 
 **Validation defaults** (each overridable per-field via `message`): required → `"This field is required."`; length → `"Must be at least/at most N characters."`; format → `"This value doesn't match the expected format."`; file count → `"Expected exactly N files."`. Validation runs client-side (in the rendered page) and again server-side on submit; a failing submission re-renders the form with field-level messages and **does not** consume the single-use drop link, so retries work. Nothing is written to disk until every field passes.
 
 **Delivered filenames:** `text`/`secret`/`token` fields land as `<name>.txt`; `file` fields land as `<name>-<original filename>` (or `<name>-<index>-<original filename>` when `count > 1`).
 
-**No spec:** `peardrop local` without `--spec`/`--spec-inline` keeps today's single paste-or-drop-a-file page.
+**No spec:** `local` without `--spec`/`--spec-inline` keeps today's single paste-or-drop-a-file page.
 
 The same spec format is accepted by peardrop.fyi's agent-facing tool for programmatic, agent-driven sessions.
 
@@ -91,8 +104,8 @@ The same spec format is accepted by peardrop.fyi's agent-facing tool for program
 A drop can run a command once the payload is confirmed written to disk — for example to load the delivered secret into a Keychain entry and append a ledger row, instead of a caller polling the target path.
 
 ```bash
-peardrop local --target ./inbox/ --on-receive ./scripts/store-deploy-key.sh
-peardrop receive --target ./inbox/ --on-receive ./scripts/store-deploy-key.sh
+npx --yes @peardrop/cli@latest local --target ./inbox/ --on-receive ./scripts/store-deploy-key.sh
+npx --yes @peardrop/cli@latest receive --target ./inbox/ --on-receive ./scripts/store-deploy-key.sh
 ```
 
 The same command can live in the spec as `[hooks] on_receive`, and `--on-receive` overrides it when both are given. An empty command is rejected before the server starts.
@@ -109,7 +122,7 @@ The raw secret value is never passed to the hook at all — not on argv, not in 
 
 The command runs through a shell (so ordinary shell syntax works) with its stdout and stderr forwarded to PearDrop's **stderr**, keeping `--json` output on stdout parseable.
 
-**A hook is a side effect, not part of the delivery.** It runs only after the write is confirmed and the sender has been told the drop landed, so a non-zero exit never un-writes an already-delivered secret. The failure is logged to stderr, and `peardrop local --json` reports it on the closing line:
+**A hook is a side effect, not part of the delivery.** It runs only after the write is confirmed and the sender has been told the drop landed, so a non-zero exit never un-writes an already-delivered secret. The failure is logged to stderr, and `local --json` reports it on the closing line:
 
 ```json
 {"mode":"local","event":"closed","status":"delivered","target":"./inbox/","pid":123,"hook":{"ok":false,"exitCode":7,"signal":null}}

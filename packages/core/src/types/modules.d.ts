@@ -31,8 +31,17 @@ declare module "@hyperswarm/dht-relay" {
   import type { Duplex } from "streamx";
   import type { DHTInstance } from "hyperdht";
 
+  class RelayDht {
+    constructor(stream: unknown, options?: { custodial?: boolean });
+    readonly defaultKeyPair: { publicKey: Uint8Array; secretKey: Uint8Array };
+    connect(publicKey: Uint8Array): Duplex & {
+      readonly opened: Promise<boolean>;
+      readonly remotePublicKey: Uint8Array;
+    };
+  }
   const relay: (dht: DHTInstance, stream: Duplex) => void;
-  export default relay;
+  export { relay };
+  export default RelayDht;
 }
 
 declare module "@hyperswarm/dht-relay/ws" {
@@ -49,9 +58,9 @@ declare module "@hyperswarm/dht-relay/ws" {
   export interface WebSocketLike {
     binaryType: string;
     readonly readyState: number;
-    send(data: Buffer | ArrayBuffer | string): void;
+    send(data: Uint8Array | ArrayBuffer | string): void;
     close(code?: number, reason?: string): void;
-    addEventListener(type: "open" | "close" | "error" | "message", listener: WebSocketLikeListener): void;
+    addEventListener(type: "open" | "close" | "error" | "message", listener: WebSocketLikeListener, options?: { readonly once?: boolean }): void;
     removeEventListener(type: "open" | "close" | "error" | "message", listener: WebSocketLikeListener): void;
   }
 

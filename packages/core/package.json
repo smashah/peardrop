@@ -18,6 +18,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./relay": {
+      "types": "./dist/relay.d.ts",
+      "import": "./dist/relay.js"
+    },
     "./node": {
       "types": "./dist/node.d.ts",
       "import": "./dist/node.js"
@@ -29,10 +33,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@hyperswarm/dht-relay": "catalog:",
+    "@noble/hashes": "1.7.1",
     "@x402/core": "catalog:",
     "@x402/evm": "catalog:",
     "effect": "catalog:",
     "hyperdht": "catalog:",
+    "sodium-javascript": "0.8.0",
     "smol-toml": "1.7.1",
     "viem": "2.55.10",
     "zod": "catalog:"

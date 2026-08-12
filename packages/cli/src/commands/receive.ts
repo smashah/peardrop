@@ -18,6 +18,7 @@ import {
 import { DropSpecError, parseDropSpecToml, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
@@ -70,6 +71,7 @@ export default class ReceiveCommand extends Command {
     "allow-relay": Flags.boolean({ description: "Deprecated alias for --relay", hidden: true, allowNo: true }),
     "relay-cap": Flags.integer({ description: "Relay transfer cap in GB", default: 2 }),
     json: Flags.boolean({ description: "Output JSON metadata" }),
+    verbose: Flags.boolean({ char: "v", description: "Write phase diagnostics to stderr" }),
     name: Flags.string({ description: "Optional tunnel label" }),
     detach: Flags.boolean({ description: "Run receiver in background" }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
@@ -91,7 +93,16 @@ export default class ReceiveCommand extends Command {
   }
 
   public async run(): Promise<void> {
+    const startedAt = performance.now();
     const { flags } = await this.parse(ReceiveCommand);
+    const elapsedMs = () => Math.max(0, Math.round(performance.now() - startedAt));
+    const writeVerbose = (phase: string, fields: Readonly<Record<string, string | number | boolean | undefined>> = {}) => {
+      if (!flags.verbose) return;
+      const details = Object.entries(fields)
+        .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
+        .map(([key, value]) => `${key}=${String(value)}`);
+      process.stderr.write(`[receiver] elapsedMs=${elapsedMs()} pid=${process.pid} phase=${phase}${details.length > 0 ? ` ${details.join(" ")}` : ""}\n`);
+    };
 
     // Malformed/invalid specs fail here, before the Worker is ever asked for a
     // tunnel — the same fail-fast contract `local` gives before it starts a server.
@@ -196,20 +207,32 @@ export default class ReceiveCommand extends Command {
     if (flags.json) {
       // Single-line, compact and flushed so a piped consumer can read one line
       // and parse the Drop URL immediately, the same way `local --json` does.
-      await writeStdout(JSON.stringify(tunnelState));
+      await writeStdout(JSON.stringify({
+        ...tunnelState,
+        event: "session",
+        relayFallbackAllowed: tunnelState.relayAllowed,
+        selectedTransport: null,
+        elapsedMs: elapsedMs(),
+        pid: process.pid,
+      }));
+      writeVerbose("session", { status: "waiting", relayFallbackAllowed: tunnelState.relayAllowed });
     } else {
-      this.log("\n=========================================");
-      this.log(` PearDrop Receiver Active`);
-      this.log(` URL: ${tunnelState.url}`);
-      this.log(` Fingerprint: ${fingerprint}`);
-      if (pinCode) this.log(` PIN required: ${pinCode}`);
-      this.log(` Target path: ${flags.target}`);
       const freeTierMB = RELAY_FREE_TIER_BYTES / (1024 * 1024);
-      this.log(
-        ` Relay path: ${tunnelState.relayAllowed ? `Enabled (free up to ${freeTierMB}MB, then metered — max $0.06)` : "Disabled (Direct-only)"}`
-      );
-      this.log("=========================================\n");
-      this.log("Waiting for sender connection...");
+      if (flags.verbose) {
+        writeVerbose("session", { status: "waiting", relayFallbackAllowed: tunnelState.relayAllowed, target: flags.target });
+      } else {
+        this.log("\n=========================================");
+        this.log(` PearDrop Receiver Active`);
+        this.log(` URL: ${tunnelState.url}`);
+        this.log(` Fingerprint: ${fingerprint}`);
+        if (pinCode) this.log(` PIN required: ${pinCode}`);
+        this.log(` Target path: ${flags.target}`);
+        this.log(
+          ` Relay fallback: ${tunnelState.relayAllowed ? `Allowed (free up to ${freeTierMB}MB, then metered — max $0.06)` : "Disallowed (Direct-only)"}`
+        );
+        this.log("=========================================\n");
+        this.log("Waiting for sender connection...");
+      }
     }
 
     const abort = new AbortController();
@@ -298,6 +321,7 @@ export default class ReceiveCommand extends Command {
     void watchRelayOverage().catch(() => undefined);
 
     const sink = new DiskSink(flags.target);
+    let deliveryConfirmed = false;
 
     try {
       await runEffect(
@@ -308,8 +332,14 @@ export default class ReceiveCommand extends Command {
           pin: pinCode,
           maxFiles: flags.files,
           maxBytes: flags["max-size"] ? flags["max-size"] * 1024 * 1024 : undefined,
-          onConnected: () => {
-            if (!flags.json) this.log("Sender connected — receiving payload...");
+          onConnected: async (details) => {
+            if (flags.json) {
+              await writeStdout(JSON.stringify({ mode: "remote", event: "connected", ...details, elapsedMs: elapsedMs(), pid: process.pid }));
+            }
+            const endpoint = details.remoteHost && details.remotePort ? ` endpoint=${details.remoteHost}:${details.remotePort}` : "";
+            const peer = details.remotePublicKey ? ` peer=${details.remotePublicKey}` : "";
+            if (flags.verbose) writeVerbose("connected", { transport: details.transport, endpoint: details.remoteHost && details.remotePort ? `${details.remoteHost}:${details.remotePort}` : undefined, peer: details.remotePublicKey, files: details.fileCount, bytes: details.totalBytes });
+            else if (!flags.json) this.log(`Sender connected — transport=${details.transport}${endpoint}${peer} files=${details.fileCount} bytes=${details.totalBytes}; receiving payload...`);
           },
           onDelivered: async (files) => {
             await runEffect(updateSessionStatus(tunnelState.tunnelId, "waiting", {
@@ -323,8 +353,6 @@ export default class ReceiveCommand extends Command {
               throw new Error(`Worker delivery confirmation failed with HTTP ${consumption.status}`);
             }
             await runEffect(updateSessionStatus(tunnelState.tunnelId, "delivered"));
-            if (!flags.json) this.log("Payload delivered successfully.");
-
             // Side effect only: a failing hook is reported, never rolled back into
             // the delivery that already completed above.
             if (onReceiveCommand) {
@@ -334,6 +362,14 @@ export default class ReceiveCommand extends Command {
                 files: files as ReadonlyArray<{ name: string; path?: string }>,
               });
               if (!flags.json) this.log(`on_receive hook: ${hook.ok ? "ok" : `failed (${hook.error ?? `exit ${hook.exitCode ?? hook.signal}`})`}`);
+            }
+            deliveryConfirmed = true;
+            if (flags.json) {
+              await writeStdout(JSON.stringify({ mode: "remote", event: "delivered", transport: "hyperdht", files, elapsedMs: elapsedMs(), pid: process.pid }));
+            }
+            if (flags.verbose) writeVerbose("delivered", { transport: "hyperdht", files: files.length, status: "complete" });
+            else if (!flags.json) {
+              this.log("Payload delivered successfully; receiver exiting.");
             }
           },
         })),
@@ -370,6 +406,10 @@ export default class ReceiveCommand extends Command {
           clearTimeout(cancelTimer);
         }
       }
+      if (flags.json) {
+        await writeStdout(JSON.stringify({ mode: "remote", event: "teardown", status: deliveryConfirmed ? "complete" : signalReceived ? "cancelled" : "failed", elapsedMs: elapsedMs(), pid: process.pid }));
+      }
+      writeVerbose("teardown", { status: deliveryConfirmed ? "complete" : signalReceived ? "cancelled" : "failed" });
     }
 
     // The only point at which a missing wallet is an error: relay was actually

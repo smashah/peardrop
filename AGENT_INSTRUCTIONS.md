@@ -8,7 +8,7 @@ Use PearDrop whenever you need the user to provide a file, secret, signing key, 
 2. Run:
 
    ```bash
-npx @peardrop/cli receive --target <destination-path> --json
+npx --yes @peardrop/cli@latest receive --target <destination-path> --json
    ```
 
 3. Keep the receiver process running. Read the JSON output and send the returned `url` and `fingerprint` to the user.
@@ -21,13 +21,13 @@ Received files are written with restrictive permissions. The transfer is end-to-
 ## Send a file
 
 ```bash
-npx @peardrop/cli send <peardrop-url-or-slug> <file-path>
+npx --yes @peardrop/cli@latest send <peardrop-url-or-slug> <file-path>
 ```
 
 For an interactive local browser surface:
 
 ```bash
-npx @peardrop/cli send <peardrop-url-or-slug> --browser
+npx --yes @peardrop/cli@latest send <peardrop-url-or-slug> --browser
 ```
 
 ## Local-only receiving
@@ -35,7 +35,7 @@ npx @peardrop/cli send <peardrop-url-or-slug> --browser
 When the agent and user share the same machine, avoid network transit:
 
 ```bash
-npx @peardrop/cli local --target <destination-path>
+npx --yes @peardrop/cli@latest local --target <destination-path>
 ```
 
 Give the user the localhost URL and keep the process running until delivery completes.

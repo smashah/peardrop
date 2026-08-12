@@ -56,7 +56,7 @@ export const loadWalletPrivateKey = Effect.gen(function* () {
   if (environmentKey) return Redacted.make(yield* validatePrivateKey(environmentKey));
   const file = walletPath();
   if (!existsSync(file)) {
-    return yield* Effect.fail(new WalletError({ message: "No wallet configured; set PEARDROP_WALLET_PRIVATE_KEY or run peardrop wallet configure", userActionable: true }));
+    return yield* Effect.fail(new WalletError({ message: "No wallet configured; set PEARDROP_WALLET_PRIVATE_KEY or run npx --yes @peardrop/cli@latest wallet configure", userActionable: true }));
   }
   const raw = yield* Effect.try({
     try: () => readFileSync(file, "utf8"),
@@ -108,7 +108,7 @@ const freeTierMB = RELAY_FREE_TIER_BYTES / (1024 * 1024);
 
 export const RELAY_OVERAGE_WALLET_MESSAGE =
   `Relay transfer would exceed the free ${freeTierMB}MB tier and no wallet is configured — ` +
-  `run \`peardrop wallet configure\` (or set PEARDROP_WALLET_PRIVATE_KEY), or keep the transfer under ${freeTierMB}MB.`;
+  `run \`npx --yes @peardrop/cli@latest wallet configure\` (or set PEARDROP_WALLET_PRIVATE_KEY), or keep the transfer under ${freeTierMB}MB.`;
 
 export const createRelayAuthorization = (workerUrl: string, relayCapGb: number) =>
   Effect.gen(function* () {

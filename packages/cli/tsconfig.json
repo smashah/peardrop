@@ -7,8 +7,9 @@
     "noEmit": true,
     "paths": {
       "@peardrop/core": ["../core/src/index.ts"],
+      "@peardrop/core/relay": ["../core/src/relay.ts"],
       "@peardrop/core/node": ["../core/src/node.ts"]
     }
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "../core/src/types/modules.d.ts"]
 }

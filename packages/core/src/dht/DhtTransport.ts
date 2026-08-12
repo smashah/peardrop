@@ -1,5 +1,7 @@
 import DHT from "hyperdht";
+import { performance } from "node:perf_hooks";
 import type { Duplex } from "node:stream";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { TransportError } from "../effect/errors.js";
@@ -33,7 +35,7 @@ export function createKeyPair(seed?: Buffer): DhtKeyPair {
 export interface ReceiverOptions {
   readonly keyPair: DhtKeyPair;
   readonly sink: BridgeSink;
-  readonly onConnected?: () => void;
+  readonly onConnected?: (details: DhtConnectionDetails) => void | Promise<void>;
   readonly onReady?: () => void;
   readonly onDelivered?: (files: ReadonlyArray<unknown>) => Promise<void>;
   readonly signal?: AbortSignal;
@@ -42,17 +44,29 @@ export interface ReceiverOptions {
   readonly maxBytes?: number;
 }
 
-const waitForAbort = (signal?: AbortSignal) =>
-  Effect.callback<void, TransportError>((resume) => {
-    if (!signal || signal.aborted) {
+export interface DhtConnectionDetails {
+  readonly transport: "hyperdht";
+  readonly fileCount: number;
+  readonly totalBytes: number;
+  readonly remotePublicKey?: string;
+  readonly remoteHost?: string;
+  readonly remotePort?: number;
+}
+
+const waitForAbort = (signal?: AbortSignal): Effect.Effect<void, TransportError> => {
+  if (!signal) return Effect.never;
+  return Effect.callback<void, TransportError>((resume) => {
+    if (signal.aborted) {
       resume(Effect.void);
       return;
     }
     signal.addEventListener("abort", () => resume(Effect.void), { once: true });
   });
+};
 
 export const runDhtReceiver = (options: ReceiverOptions) =>
   Effect.gen(function* () {
+    const completed = yield* Deferred.make<void>();
     const dht = yield* Effect.acquireRelease(
       Effect.sync(() => new DHT()),
       (node) =>
@@ -65,7 +79,14 @@ export const runDhtReceiver = (options: ReceiverOptions) =>
     const server = yield* Effect.acquireRelease(
       Effect.sync(() =>
         dht.createServer((socket: Duplex) => {
-          void handleIncomingSocket(socket, options.sink, options.onConnected, options.onDelivered, options);
+          void handleIncomingSocket(
+            socket,
+            options.sink,
+            options.onConnected,
+            options.onDelivered,
+            () => Effect.runFork(Deferred.succeed(completed, undefined)),
+            options
+          );
         })
       ),
       (srv) =>
@@ -81,14 +102,15 @@ export const runDhtReceiver = (options: ReceiverOptions) =>
     });
     options.onReady?.();
 
-    yield* waitForAbort(options.signal);
+    yield* Effect.raceFirst(waitForAbort(options.signal), Deferred.await(completed));
   });
 
 function handleIncomingSocket(
   socket: Duplex,
   sink: BridgeSink,
-  onConnected?: () => void,
+  onConnected?: (details: DhtConnectionDetails) => void | Promise<void>,
   onDelivered?: (files: ReadonlyArray<unknown>) => Promise<void>,
+  onCompleted?: () => void,
   options: Pick<ReceiverOptions, "pin" | "maxFiles" | "maxBytes"> = {}
 ): void {
   const parser = new PdwpFrameParser();
@@ -117,7 +139,9 @@ function handleIncomingSocket(
           const payload = yield* decoded(() => Schema.decodeUnknownSync(ManifestPayloadSchema)(frame.payload));
           if (payload.files.length === 0 || !Number.isSafeInteger(payload.totalBytes) || payload.totalBytes < 0 || payload.files.some((file) => !Number.isSafeInteger(file.bytes) || file.bytes < 0) || (options.maxFiles && payload.files.length > options.maxFiles) || (options.maxBytes && payload.totalBytes > options.maxBytes) || payload.totalBytes !== payload.files.reduce((total, file) => total + file.bytes, 0)) return yield* Effect.fail(new TransportError({ message: "PDWP manifest exceeds receiver limits" }));
           manifest = payload;
-          onConnected?.();
+          if (onConnected) {
+            yield* callSink(() => Promise.resolve(onConnected(describeConnection(socket, payload.files.length, payload.totalBytes))));
+          }
           yield* callSink(() => sink.onStart(payload.kind, payload.files));
           yield* writeFrame(socket, PdwpCodec.encodeJsonFrame(FrameType.ACCEPT, { ok: true }));
         } else if (frame.type === FrameType.FILE) {
@@ -139,7 +163,7 @@ function handleIncomingSocket(
             const files = yield* callSink(() => sink.onDone());
             if (onDelivered) yield* callSink(() => onDelivered(files));
             yield* writeFrame(socket, PdwpCodec.encodeJsonFrame(FrameType.DONE, { ok: true, files }));
-            socket.end();
+            socket.end(() => onCompleted?.());
           }
         } else if (frame.type === FrameType.DONE) {
           return yield* Effect.fail(new TransportError({ message: "PDWP DONE is receiver-to-sender only" }));
@@ -162,6 +186,19 @@ function handleIncomingSocket(
   socket.on("error", (cause) => {
     Effect.runFork(fail(new TransportError({ message: `DHT socket error: ${String(cause)}` })));
   });
+}
+
+function describeConnection(socket: Duplex, fileCount: number, totalBytes: number): DhtConnectionDetails {
+  const dhtSocket = socket as Duplex & {
+    readonly remotePublicKey?: unknown;
+    readonly rawStream?: { readonly remoteHost?: unknown; readonly remotePort?: unknown };
+  };
+  const remotePublicKey = Buffer.isBuffer(dhtSocket.remotePublicKey)
+    ? dhtSocket.remotePublicKey.toString("hex")
+    : undefined;
+  const remoteHost = typeof dhtSocket.rawStream?.remoteHost === "string" ? dhtSocket.rawStream.remoteHost : undefined;
+  const remotePort = typeof dhtSocket.rawStream?.remotePort === "number" ? dhtSocket.rawStream.remotePort : undefined;
+  return { transport: "hyperdht", fileCount, totalBytes, remotePublicKey, remoteHost, remotePort };
 }
 
 const writeFrame = (socket: Duplex, frame: Buffer) =>
@@ -223,8 +260,17 @@ export interface SenderConnectOptions {
   readonly publicKeyHex: string;
 }
 
+export interface DhtSenderConnectionDetails {
+  readonly transport: "hyperdht";
+  readonly dhtConnectMs: number;
+  readonly remotePublicKey: string;
+  readonly remoteHost?: string;
+  readonly remotePort?: number;
+}
+
 export const connectDhtSender = (options: SenderConnectOptions) =>
   Effect.gen(function* () {
+    const connectStartedAt = performance.now();
     const dht = yield* Effect.acquireRelease(
       Effect.sync(() => new DHT()),
       (node) =>
@@ -235,12 +281,34 @@ export const connectDhtSender = (options: SenderConnectOptions) =>
     );
 
     const remoteKey = Buffer.from(options.publicKeyHex.replace(/^0x/i, ""), "hex");
-    const socket = yield* Effect.sync(() => dht.connect(remoteKey) as Duplex);
+    const socket = yield* Effect.sync(() => dht.connect(remoteKey) as DhtSenderSocket);
+    const opened = yield* Effect.tryPromise({
+      try: () => socket.opened,
+      catch: (cause) => new TransportError({ message: `DHT connection failed: ${String(cause)}` }),
+    });
+    if (!opened) {
+      return yield* Effect.fail(new TransportError({ message: "DHT connection closed before the encrypted session opened" }));
+    }
+
+    const details: DhtSenderConnectionDetails = {
+      transport: "hyperdht",
+      dhtConnectMs: Math.round(performance.now() - connectStartedAt),
+      remotePublicKey: socket.remotePublicKey.toString("hex"),
+      remoteHost: typeof socket.rawStream?.remoteHost === "string" ? socket.rawStream.remoteHost : undefined,
+      remotePort: typeof socket.rawStream?.remotePort === "number" ? socket.rawStream.remotePort : undefined,
+    };
 
     return {
       socket,
+      details,
       close: () => {
         socket.destroy();
       },
     };
   });
+
+type DhtSenderSocket = Duplex & {
+  readonly opened: Promise<boolean>;
+  readonly remotePublicKey: Buffer;
+  readonly rawStream?: { readonly remoteHost?: unknown; readonly remotePort?: unknown };
+};

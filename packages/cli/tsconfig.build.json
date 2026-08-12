@@ -6,6 +6,7 @@
     "outDir": "dist",
     "paths": {
       "@peardrop/core": ["../core/dist/index.d.ts"],
+      "@peardrop/core/relay": ["../core/dist/relay.d.ts"],
       "@peardrop/core/node": ["../core/dist/node.d.ts"]
     },
     "rootDir": "src"

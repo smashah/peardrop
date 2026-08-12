@@ -35,15 +35,19 @@ pnpm run package:smoke
 ## CLI
 
 ```bash
-npx @peardrop/cli receive --target ./inbox
-npx @peardrop/cli send https://peardrop.fyi/<slug> ./file.zip
+npx --yes @peardrop/cli@latest receive --target ./inbox
+npx --yes @peardrop/cli@latest <slug> "text to send"
+npx --yes @peardrop/cli@latest send <slug> ./file.zip
+npx --yes @peardrop/cli@latest test nc
 ```
 
-Direct transfers use HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path.
+Normal CLI sends use direct HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path. Add `--relay` to `send` when you need to force the same WebSocket-to-HyperDHT Relay transport used by the hosted sender; it tries non-custodial Relay first and falls back to custodial forwarding only when required. Pass `--no-relay` to `receive` when you explicitly want a direct-only session.
+
+`test nc` runs a disposable, non-custodial-only production Relay transfer without a browser. It verifies the received bytes and hash, receiver shutdown, and tunnel consumption, then removes its temporary payload and inbox. Use `--json` for structured lifecycle output or `--timeout 1m` to override the bounded 30-second default.
 
 ## Relay
 
-The relay forwards opaque ciphertext and does not store payloads. It requires signed relay tickets and can report byte usage to a compatible control plane.
+In non-custodial mode the relay forwards opaque handshake and payload bytes without receiving the sender's session key. When a normal sender cannot reach the receiver through that path, it can retry in custodial fallback mode; that mode terminates sender-side encryption at the relay and can inspect bytes in transit, but stores no payload. The selected mode is reported for every transfer. Relay admission requires signed tickets and can report byte usage to a compatible control plane; `test nc` disables fallback so it specifically proves or falsifies the non-custodial path.
 
 ```bash
 docker build -f infra/relay/Dockerfile -t peardrop-relay .
