@@ -9,6 +9,13 @@
 
 
 
+
+## 1.5.2
+<sub>2026-08-12</sub>
+
+- [#57](https://github.com/smashah/peardrop/pull/57) [`ffa3518`](https://github.com/smashah/peardrop/commit/ffa3518e245922cabab6426f9f55ea83a1c12232)  *(patch)*
+  PearDrop now accepts `peardrop <slug> <text>` as the default send form, labels relay as fallback permission instead of the selected transport, reports the actual connection plus direct-transfer phase timings, emits structured connection and delivery events, and exits the one-time receiver after its acknowledged delivery. Forced `send --relay` transfers now share the hosted sender's non-custodial-first Relay state machine, and `test nc` performs a disposable non-custodial production diagnostic with exact byte, hash, lifecycle, cleanup, and tunnel-consumption checks.
+
 ## 1.5.1
 <sub>2026-08-12</sub>
 
