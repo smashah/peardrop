@@ -29,6 +29,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@hyperswarm/dht-relay": "catalog:",
+    "@noble/hashes": "1.7.1",
     "@x402/core": "catalog:",
     "@x402/evm": "catalog:",
     "effect": "catalog:",

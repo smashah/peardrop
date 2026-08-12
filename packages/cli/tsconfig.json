@@ -10,5 +10,5 @@
       "@peardrop/core/node": ["../core/src/node.ts"]
     }
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "../core/src/types/modules.d.ts"]
 }

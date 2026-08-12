@@ -38,9 +38,12 @@ pnpm run package:smoke
 npx --yes @peardrop/cli@latest receive --target ./inbox
 npx --yes @peardrop/cli@latest <slug> "text to send"
 npx --yes @peardrop/cli@latest send <slug> ./file.zip
+npx --yes @peardrop/cli@latest test nc
 ```
 
-Relay fallback is automatic; no sender relay flag or URL is required. Pass `--no-relay` to `receive` when you explicitly want a direct-only session. Direct transfers use HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path.
+Normal CLI sends use direct HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path. Add `--relay` to `send` when you need to force the same WebSocket-to-HyperDHT Relay transport used by the hosted sender; it tries non-custodial Relay first and falls back to custodial forwarding only when required. Pass `--no-relay` to `receive` when you explicitly want a direct-only session.
+
+`test nc` runs a disposable, non-custodial-only production Relay transfer without a browser. It verifies the received bytes and hash, receiver shutdown, and tunnel consumption, then removes its temporary payload and inbox. Use `--json` for structured lifecycle output or `--timeout 1m` to override the bounded 30-second default.
 
 ## Relay
 

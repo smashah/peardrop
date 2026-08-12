@@ -33,4 +33,12 @@ describe("default send invocation", () => {
       "--browser",
     ]);
   });
+
+  it("maps the first-class test nc spelling to the oclif topic command", () => {
+    expect(normalizeCliArgv(["test", "nc", "--timeout", "30s"])).toEqual([
+      "test:nc",
+      "--timeout",
+      "30s",
+    ]);
+  });
 });

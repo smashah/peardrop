@@ -8,3 +8,4 @@ export * from "./effect/runtime.js";
 export * from "./effect/errors.js";
 export * from "./tickets/RelayTicket.js";
 export * from "./spec/dropSpec.js";
+export * from "./relay/RelaySender.js";

@@ -6,13 +6,25 @@ PearDrop creates short-lived, end-to-end encrypted file and secret drops over Hy
 npx --yes @peardrop/cli@latest receive --target ./inbox
 npx --yes @peardrop/cli@latest silent-moss-7f2 "text to send"
 npx --yes @peardrop/cli@latest send silent-moss-7f2 ./file.zip
+npx --yes @peardrop/cli@latest test nc
 ```
 
 Drop links are two words and a short code — `silent-moss-7f2` — so they survive being read aloud or typed from a phone. The slug names a drop; it never authorizes one. The `local` command serves its page on `http://127.0.0.1:<port>/<slug>` while uploads are still gated on a single-use token the page holds, and remote tunnels are still gated on their owner token.
 
 The receiver prints a shareable URL and keeps the private key on the receiving machine. Direct transfers are free, and so are the first 5MB of any relayed transfer; only relay usage past that free tier is metered.
 
-No wallet and no flags are needed to run `receive`. Relay is the default path: when a direct connection is impossible, PearDrop relays automatically. Pass `--no-relay` to stay direct-only. Enabling relay never loads a wallet or contacts the payment facilitator on its own — the wallet is used lazily, only once direct P2P did not carry the transfer and relayed bytes trend over the free 5MB tier. At that point, an unconfigured wallet is reported with an actionable message instead of failing the session up front.
+No wallet and no flags are needed to run `receive`. Relay fallback is allowed by default, while the actual transport is reported when a sender connects. Pass `--no-relay` to stay direct-only. Enabling relay never loads a wallet or contacts the payment facilitator on its own — the wallet is used lazily, only once direct P2P did not carry the transfer and relayed bytes trend over the free 5MB tier. At that point, an unconfigured wallet is reported with an actionable message instead of failing the session up front.
+
+Force the hosted WebSocket Relay transport from the CLI with either a text payload or a file:
+
+```bash
+npx --yes @peardrop/cli@latest send silent-moss-7f2 --relay --text "text to send"
+npx --yes @peardrop/cli@latest send silent-moss-7f2 --relay ./file.zip
+```
+
+The forced Relay sender uses the same state machine as the hosted web sender: non-custodial WebSocket-to-HyperDHT first, with custodial forwarding only as a fallback. Add `--verbose` for elapsed phase diagnostics on stderr or `--json` for structured lifecycle events on stdout.
+
+`npx --yes @peardrop/cli@latest test nc` is the production non-custodial diagnostic. It creates a disposable receiver, forces Relay with custodial fallback disabled, verifies byte-for-byte delivery and clean receiver exit, confirms the tunnel was consumed, and deletes its temporary data. Its default timeout is 30 seconds; override it with a bounded duration such as `--timeout 1m`, and add `--json` for stable machine-readable events and the final summary.
 
 `--json` prints one compact JSON line per event on stdout: the session (with the drop URL and relay fallback permission), the accepted connection's actual transport details, and the delivered file metadata. A startup failure emits `{"mode":"remote","event":"error","error":"…"}` and exits non-zero. Every line is flushed as it is written, and a successful one-time receiver exits after its delivery acknowledgement is flushed. Direct CLI sends also report descriptor lookup, payload preparation, DHT connection, transfer, and total timings so network discovery time is visible instead of being folded into one delivery duration.
 

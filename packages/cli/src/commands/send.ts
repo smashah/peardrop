@@ -1,11 +1,21 @@
 import { Command, Flags, Args } from "@oclif/core";
 import { BridgeServer, PdwpSink, connectDhtSender, runEffect } from "@peardrop/core/node";
+import {
+  RelaySenderError,
+  sendRelay,
+  type RelayFile,
+  type RelayLifecycleEvent,
+  type RelayWebSocket,
+} from "@peardrop/core";
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { basename } from "node:path";
-import { open as openFile } from "node:fs/promises";
+import { open as openFile, stat } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
+import { Readable } from "node:stream";
 import * as Effect from "effect/Effect";
 import open from "open";
+import WebSocket from "ws";
 
 const PDWP_CHUNK_BYTES = 64 * 1024;
 
@@ -21,6 +31,11 @@ export default class SendCommand extends Command {
     browser: Flags.boolean({ char: "b", description: "Open local bridge UI in browser (Mode 1)" }),
     text: Flags.string({ description: "Text/secret to send" }),
     pin: Flags.string({ description: "Receiver PIN when the tunnel requires one" }),
+    relay: Flags.boolean({ description: "Force the production WebSocket Relay transport" }),
+    verbose: Flags.boolean({ char: "v", description: "Write phase diagnostics to stderr" }),
+    json: Flags.boolean({ description: "Write structured lifecycle events to stdout" }),
+    "non-custodial-only": Flags.boolean({ hidden: true, description: "Disable custodial Relay fallback" }),
+    "relay-timeout-ms": Flags.integer({ hidden: true, default: 30_000 }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
   };
 
@@ -31,6 +46,25 @@ export default class SendCommand extends Command {
     const slug = args.targetUrl.includes("/") ? args.targetUrl.split("/").pop()! : args.targetUrl;
     const workerUrl = flags["worker-url"].replace(/\/$/, "");
 
+    const descriptorStartedAt = performance.now();
+    const writeJson = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+    const writeVerbose = (source: "sender" | "relay", value: { readonly phase: string; readonly elapsedMs: number; readonly status?: string; readonly attempt?: number; readonly mode?: string; readonly reason?: string; readonly error?: string }) => {
+      if (!flags.verbose) return;
+      const details = [
+        `elapsedMs=${value.elapsedMs}`,
+        `pid=${process.pid}`,
+        `phase=${value.phase}`,
+        value.attempt === undefined ? undefined : `attempt=${value.attempt}`,
+        value.mode === undefined ? undefined : `mode=${value.mode}`,
+        value.status === undefined ? undefined : `status=${value.status}`,
+        value.reason === undefined ? undefined : `reason=${value.reason}`,
+        value.error === undefined ? undefined : `error=${value.error}`,
+      ].filter((part): part is string => part !== undefined);
+      process.stderr.write(`[${source}] ${details.join(" ")}\n`);
+    };
+    const descriptorStartEvent = { event: "sender", phase: "descriptor-fetch", status: "start", elapsedMs: 0, pid: process.pid } as const;
+    if (flags.json) writeJson(descriptorStartEvent);
+    writeVerbose("sender", descriptorStartEvent);
     const descriptor = await runEffect(Effect.tryPromise({
       try: async (): Promise<{ publicKey?: string; label?: string; maxSizeMB?: number; expectedFiles?: number } | null> => {
         const res = await fetch(`${workerUrl}/api/tunnels/${slug}`);
@@ -40,6 +74,9 @@ export default class SendCommand extends Command {
     }).pipe(Effect.orElseSucceed(() => null)));
     const descriptorCompletedAt = performance.now();
     const descriptorMs = Math.round(descriptorCompletedAt - startedAt);
+    const descriptorEvent = { event: "sender", phase: "descriptor-fetch", status: "complete", elapsedMs: descriptorMs, durationMs: Math.round(descriptorCompletedAt - descriptorStartedAt), pid: process.pid } as const;
+    if (flags.json) writeJson(descriptorEvent);
+    writeVerbose("sender", descriptorEvent);
 
     if (flags.browser || (!args.files && !flags.text)) {
       if (!descriptor?.publicKey) {
@@ -87,6 +124,54 @@ export default class SendCommand extends Command {
       this.error("Specify a file path or use --browser for the local drop surface.");
       return;
     }
+
+    if (flags.relay) {
+      const relayFile: RelayFile = flags.text
+        ? {
+            name: "pasted-secret.txt",
+            size: Buffer.byteLength(flags.text, "utf8"),
+            stream: () => {
+              const payload = new TextEncoder().encode(flags.text);
+              return new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(payload);
+                  controller.close();
+                },
+              });
+            },
+          }
+        : yieldFile(filePath!, await stat(filePath!));
+      try {
+        const result = await runEffect(Effect.scoped(sendRelay({
+          descriptor: { slug, publicKey },
+          files: [relayFile],
+          workerUrl,
+          pin: flags.pin,
+          fallback: flags["non-custodial-only"] ? "none" : "custodial",
+          acceptTimeoutMs: flags["relay-timeout-ms"],
+          onEvent: (event) => {
+            const adjusted = { ...event, elapsedMs: descriptorMs + event.elapsedMs, pid: process.pid, transport: "relay" as const };
+            if (flags.json) writeJson(adjusted);
+            writeVerbose("relay", adjusted);
+          },
+        }, {
+          fetch,
+          createWebSocket: (url) => new WebSocket(url) as unknown as RelayWebSocket,
+        })));
+        const totalMs = Math.round(performance.now() - startedAt);
+        const delivered = { event: "delivered", transport: "relay", mode: result.mode, files: result.files, elapsedMs: totalMs, pid: process.pid } as const;
+        if (flags.json) writeJson(delivered);
+        else this.log(`Delivered ${result.files.length} file(s) via Relay (${result.mode}) in ${totalMs}ms.`);
+        return;
+      } catch (cause) {
+        const failure = cause instanceof RelaySenderError
+          ? { event: "error", transport: "relay", phase: cause.phase, attempt: cause.attempt, mode: cause.mode, error: cause.message, elapsedMs: Math.round(performance.now() - startedAt), pid: process.pid }
+          : { event: "error", transport: "relay", phase: "unknown", error: cause instanceof Error ? cause.message : String(cause), elapsedMs: Math.round(performance.now() - startedAt), pid: process.pid };
+        if (flags.json) writeJson(failure);
+        writeVerbose("relay", { ...failure, status: "failed" });
+        this.error(`Relay send failed at ${failure.phase}: ${failure.error}`);
+      }
+    }
     const command = this;
     await runEffect(
       Effect.scoped(
@@ -118,9 +203,10 @@ export default class SendCommand extends Command {
           const endpoint = dhtSender.details.remoteHost && dhtSender.details.remotePort
             ? ` endpoint=${dhtSender.details.remoteHost}:${dhtSender.details.remotePort}`
             : "";
-          command.log(
-            `Connected — transport=${dhtSender.details.transport}${endpoint} peer=${dhtSender.details.remotePublicKey} dhtConnectMs=${dhtSender.details.dhtConnectMs}`
-          );
+          const connectedLine = `Connected — transport=${dhtSender.details.transport}${endpoint} peer=${dhtSender.details.remotePublicKey} dhtConnectMs=${dhtSender.details.dhtConnectMs}`;
+          if (flags.json) writeJson({ event: "connected", ...dhtSender.details, elapsedMs: Math.round(performance.now() - startedAt), pid: process.pid });
+          else if (flags.verbose) process.stderr.write(`[sender] elapsedMs=${Math.round(performance.now() - startedAt)} pid=${process.pid} phase=dht-connect transport=${dhtSender.details.transport} dhtConnectMs=${dhtSender.details.dhtConnectMs}\n`);
+          else command.log(connectedLine);
           const transferStartedAt = performance.now();
           const sink = new PdwpSink(dhtSender.socket, flags.pin);
           yield* Effect.tryPromise({ try: () => sink.onStart("files", [{ name, bytes: totalBytes, sha256 }]), catch: () => new Error("Receiver did not accept the PDWP manifest") });
@@ -141,11 +227,17 @@ export default class SendCommand extends Command {
           const received = yield* Effect.tryPromise({ try: () => sink.onDone(), catch: () => new Error("Receiver did not acknowledge delivery") });
           const transferMs = Math.round(performance.now() - transferStartedAt);
           const totalMs = Math.round(performance.now() - startedAt);
-          command.log(
-            `Delivered ${received.length} file(s) after receiver confirmation — descriptorMs=${descriptorMs} prepareMs=${prepareMs} dhtConnectMs=${dhtSender.details.dhtConnectMs} transferMs=${transferMs} totalMs=${totalMs}.`
-          );
+          if (flags.json) writeJson({ event: "delivered", transport: dhtSender.details.transport, files: received, descriptorMs, prepareMs, dhtConnectMs: dhtSender.details.dhtConnectMs, transferMs, totalMs, elapsedMs: totalMs, pid: process.pid });
+          else if (flags.verbose) process.stderr.write(`[sender] elapsedMs=${totalMs} pid=${process.pid} phase=done transport=${dhtSender.details.transport} status=complete descriptorMs=${descriptorMs} prepareMs=${prepareMs} dhtConnectMs=${dhtSender.details.dhtConnectMs} transferMs=${transferMs} totalMs=${totalMs}\n`);
+          else command.log(`Delivered ${received.length} file(s) after receiver confirmation — descriptorMs=${descriptorMs} prepareMs=${prepareMs} dhtConnectMs=${dhtSender.details.dhtConnectMs} transferMs=${transferMs} totalMs=${totalMs}.`);
         })
       )
     );
   }
 }
+
+const yieldFile = (path: string, details: { readonly size: number }): RelayFile => ({
+  name: basename(path),
+  size: details.size,
+  stream: () => Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>,
+});
