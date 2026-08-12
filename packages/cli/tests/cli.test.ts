@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import ReceiveCommand from "../src/commands/receive.js";
+import SendCommand from "../src/commands/send.js";
 
 const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoDir = join(packageDir, "..", "..");
@@ -148,6 +149,10 @@ describe("peardrop CLI", () => {
     const config = await Config.load(join(dirname(fileURLToPath(import.meta.url)), ".."));
     return ReceiveCommand.run(argv, config);
   };
+  const runSend = async (argv: string[]) => {
+    const config = await Config.load(join(dirname(fileURLToPath(import.meta.url)), ".."));
+    return SendCommand.run(argv, config);
+  };
   const captureStdout = () => {
     const chunks: string[] = [];
     vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown, encoding: unknown, callback: unknown) => {
@@ -186,6 +191,18 @@ describe("peardrop CLI", () => {
       const reported = JSON.parse(chunks.join("").trim()) as { event: string; error: string };
       expect(reported.event).toBe("error");
       expect(reported.error).toContain("--detach is unavailable");
+    });
+  });
+
+  describe("send --json reports descriptor failures structurally", () => {
+    it("names descriptor-fetch as the failed phase before exiting", async () => {
+      const chunks = captureStdout();
+      await expect(runSend(["test-drop", "--text", "hello", "--json", "--worker-url", "http://127.0.0.1:1"])).rejects.toMatchObject({
+        oclif: { exit: 2 },
+      });
+
+      const events = chunks.join("").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { event: string; phase: string; status?: string });
+      expect(events.at(-1)).toMatchObject({ event: "error", phase: "descriptor-fetch", status: "failed" });
     });
   });
 

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   resolve: {
     alias: {
+      "@peardrop/core/relay": fileURLToPath(new URL("../core/src/relay.ts", import.meta.url)),
       "@peardrop/core/node": fileURLToPath(new URL("../core/src/node.ts", import.meta.url)),
       "@peardrop/core": fileURLToPath(new URL("../core/src/index.ts", import.meta.url)),
     },

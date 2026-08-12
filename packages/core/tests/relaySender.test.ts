@@ -5,6 +5,9 @@ import * as Effect from "effect/Effect";
 const writes: Uint8Array[] = [];
 const custodialModes: boolean[] = [];
 let rejectNonCustodial = false;
+let closeDuringBackpressure = false;
+let dhtDestroyCount = 0;
+let webSocketCloseCount = 0;
 let deliveredFiles = [{ name: "message.txt", bytes: 5, sha256: "abc" }];
 
 vi.mock("@hyperswarm/dht-relay/ws", () => ({ default: class RelayStream {} }));
@@ -25,6 +28,10 @@ vi.mock("@hyperswarm/dht-relay", () => ({
       peer.write = (frame) => {
         writes.push(frame);
         const type = frame[4];
+        if (closeDuringBackpressure && type === 1) {
+          queueMicrotask(() => peer.emit("close"));
+          return false;
+        }
         if (type === 2 && !(rejectNonCustodial && !this.custodial)) {
           queueMicrotask(() => peer.emit("data", encodeJson(3, { ok: true })));
         }
@@ -35,6 +42,9 @@ vi.mock("@hyperswarm/dht-relay", () => ({
       };
       peer.destroy = () => undefined;
       return peer;
+    }
+    destroy() {
+      dhtDestroyCount += 1;
     }
   },
 }));
@@ -58,7 +68,9 @@ class MockWebSocket extends EventTarget {
     queueMicrotask(() => this.dispatchEvent(new Event("open")));
   }
   send() {}
-  close() {}
+  close() {
+    webSocketCloseCount += 1;
+  }
 }
 
 const descriptor = { slug: "drop", publicKey: "a".repeat(64) };
@@ -90,6 +102,9 @@ beforeEach(() => {
   writes.length = 0;
   custodialModes.length = 0;
   rejectNonCustodial = false;
+  closeDuringBackpressure = false;
+  dhtDestroyCount = 0;
+  webSocketCloseCount = 0;
   deliveredFiles = [{ name: "message.txt", bytes: 5, sha256: "abc" }];
 });
 
@@ -151,5 +166,32 @@ describe("shared Relay sender", () => {
     expect(exit._tag).toBe("Failure");
     expect(String(exit)).toContain("ACCEPT");
     expect(String(exit)).toContain(RelaySenderError.name);
+  });
+
+  it("closes the WebSocket and DHT when descriptor validation fails after connection", async () => {
+    const exit = await Effect.runPromiseExit(Effect.scoped(sendRelay({
+      descriptor: { slug: "drop", publicKey: "invalid" },
+      files: [file],
+      fallback: "none",
+    }, adapters)));
+
+    expect(exit._tag).toBe("Failure");
+    expect(webSocketCloseCount).toBeGreaterThan(0);
+    expect(dhtDestroyCount).toBeGreaterThan(0);
+  });
+
+  it("fails a backpressured write when the peer closes instead of hanging", async () => {
+    closeDuringBackpressure = true;
+    const exit = await Effect.runPromiseExit(Effect.scoped(sendRelay({
+      descriptor,
+      files: [file],
+      fallback: "none",
+      acceptTimeoutMs: 50,
+    }, adapters)));
+
+    expect(exit._tag).toBe("Failure");
+    expect(String(exit)).toContain("HELLO");
+    expect(webSocketCloseCount).toBeGreaterThan(0);
+    expect(dhtDestroyCount).toBeGreaterThan(0);
   });
 });

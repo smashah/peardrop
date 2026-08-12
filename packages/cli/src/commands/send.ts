@@ -6,7 +6,7 @@ import {
   type RelayFile,
   type RelayLifecycleEvent,
   type RelayWebSocket,
-} from "@peardrop/core";
+} from "@peardrop/core/relay";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { basename } from "node:path";
@@ -65,13 +65,24 @@ export default class SendCommand extends Command {
     const descriptorStartEvent = { event: "sender", phase: "descriptor-fetch", status: "start", elapsedMs: 0, pid: process.pid } as const;
     if (flags.json) writeJson(descriptorStartEvent);
     writeVerbose("sender", descriptorStartEvent);
-    const descriptor = await runEffect(Effect.tryPromise({
-      try: async (): Promise<{ publicKey?: string; label?: string; maxSizeMB?: number; expectedFiles?: number } | null> => {
-        const res = await fetch(`${workerUrl}/api/tunnels/${slug}`);
-        return res.ok ? await res.json() : null;
-      },
-      catch: () => new Error("Tunnel descriptor unavailable"),
-    }).pipe(Effect.orElseSucceed(() => null)));
+    let descriptor: { publicKey?: string; label?: string; maxSizeMB?: number; expectedFiles?: number };
+    try {
+      const response = await fetch(`${workerUrl}/api/tunnels/${slug}`);
+      if (!response.ok) throw new Error(`Tunnel descriptor request failed with HTTP ${response.status}`);
+      descriptor = await response.json() as typeof descriptor;
+    } catch (cause) {
+      const failure = {
+        event: "error",
+        phase: "descriptor-fetch",
+        status: "failed",
+        error: cause instanceof Error ? cause.message : String(cause),
+        elapsedMs: Math.round(performance.now() - startedAt),
+        pid: process.pid,
+      } as const;
+      if (flags.json) writeJson(failure);
+      writeVerbose("sender", failure);
+      this.error(`Tunnel descriptor unavailable: ${failure.error}`);
+    }
     const descriptorCompletedAt = performance.now();
     const descriptorMs = Math.round(descriptorCompletedAt - startedAt);
     const descriptorEvent = { event: "sender", phase: "descriptor-fetch", status: "complete", elapsedMs: descriptorMs, durationMs: Math.round(descriptorCompletedAt - descriptorStartedAt), pid: process.pid } as const;

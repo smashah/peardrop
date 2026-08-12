@@ -47,7 +47,7 @@ Normal CLI sends use direct HyperDHT Noise connections and keep PearDrop infrast
 
 ## Relay
 
-The relay forwards opaque ciphertext and does not store payloads. It requires signed relay tickets and can report byte usage to a compatible control plane.
+In non-custodial mode the relay forwards opaque handshake and payload bytes without receiving the sender's session key. When a normal sender cannot reach the receiver through that path, it can retry in custodial fallback mode; that mode terminates sender-side encryption at the relay and can inspect bytes in transit, but stores no payload. The selected mode is reported for every transfer. Relay admission requires signed tickets and can report byte usage to a compatible control plane; `test nc` disables fallback so it specifically proves or falsifies the non-custodial path.
 
 ```bash
 docker build -f infra/relay/Dockerfile -t peardrop-relay .

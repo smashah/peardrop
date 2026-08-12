@@ -86,12 +86,12 @@ const childExit = (child: ChildProcess): Promise<number> => {
   });
 };
 
-const terminateChild = async (child: ChildProcess | undefined): Promise<void> => {
+const terminateChild = async (child: ChildProcess | undefined, graceMs = 1_000): Promise<void> => {
   if (!child || child.exitCode !== null) return;
   child.kill("SIGTERM");
   await Promise.race([
     childExit(child).then(() => undefined),
-    new Promise<void>((resolveWait) => setTimeout(resolveWait, 1_000)),
+    new Promise<void>((resolveWait) => setTimeout(resolveWait, graceMs)),
   ]);
   if (child.exitCode === null) {
     child.kill("SIGKILL");
@@ -145,8 +145,10 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
   let receiver: ChildProcess | undefined;
   let sender: ChildProcess | undefined;
   let sessionSlug: string | undefined;
+  let sessionOwnerToken: string | undefined;
   let receiverDelivered: JsonObject | undefined;
   let lastPhase: string | undefined;
+  let failedPhase: string | undefined;
   let sequence = 0;
   let artifactWrites = Promise.resolve();
   let succeeded = false;
@@ -164,6 +166,7 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
         ? object.event
         : channel;
     if (object) lastPhase = phase;
+    if (object?.status === "failed" || object?.event === "error") failedPhase = phase;
     const entry = {
       event: "diagnostic",
       sequence: ++sequence,
@@ -204,7 +207,7 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
     abortFailure = new DiagnosticFailure(phase, message);
     rejectAbort?.(abortFailure);
   };
-  const timeout = setTimeout(() => abort(lastPhase ?? "timeout", `Diagnostic exceeded ${options.timeoutMs}ms`), options.timeoutMs);
+  const timeout = setTimeout(() => abort(failedPhase ?? lastPhase ?? "timeout", `Diagnostic exceeded ${options.timeoutMs}ms`), options.timeoutMs);
   const onSignal = (signal: NodeJS.Signals) => abort("signal", `Diagnostic interrupted by ${signal}`);
   const onSigint = () => onSignal("SIGINT");
   const onSigterm = () => onSignal("SIGTERM");
@@ -217,6 +220,7 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
       const parsed = parseJsonLine(line);
       if (source === "receiver" && parsed?.event === "session" && typeof parsed.tunnelId === "string") {
         sessionSlug = parsed.tunnelId;
+        if (typeof parsed.ownerToken === "string") sessionOwnerToken = parsed.ownerToken;
         resolveSession?.(parsed.tunnelId);
       }
       if (source === "receiver" && parsed?.event === "delivered") receiverDelivered = parsed;
@@ -265,9 +269,9 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
     ], { stdio: ["ignore", "pipe", "pipe"] });
     attachLines(sender, "sender");
     senderExitCode = await Promise.race([childExit(sender), aborted]);
-    if (senderExitCode !== 0) throw new DiagnosticFailure(lastPhase ?? "sender-exit", `Sender exited ${senderExitCode}`);
+    if (senderExitCode !== 0) throw new DiagnosticFailure(failedPhase ?? lastPhase ?? "sender-exit", `Sender exited ${senderExitCode}`);
     receiverExitCode = await Promise.race([childExit(receiver), aborted]);
-    if (receiverExitCode !== 0) throw new DiagnosticFailure(lastPhase ?? "receiver-exit", `Receiver exited ${receiverExitCode}`);
+    if (receiverExitCode !== 0) throw new DiagnosticFailure(failedPhase ?? lastPhase ?? "receiver-exit", `Receiver exited ${receiverExitCode}`);
     if (!receiverDelivered) throw new DiagnosticFailure("receiver-delivered", "Receiver exited without a delivered event");
 
     const deliveredFiles = Array.isArray(receiverDelivered.files) ? receiverDelivered.files : [];
@@ -304,7 +308,7 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
   } catch (cause) {
     const failure = cause instanceof DiagnosticFailure
       ? cause
-      : abortFailure ?? new DiagnosticFailure(lastPhase ?? "unknown", cause instanceof Error ? cause.message : String(cause));
+      : abortFailure ?? new DiagnosticFailure(failedPhase ?? lastPhase ?? "unknown", cause instanceof Error ? cause.message : String(cause));
     const summary: NcDiagnosticSummary = {
       event: "summary",
       status: "failed",
@@ -324,7 +328,33 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
     clearTimeout(timeout);
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
-    await Promise.all([terminateChild(sender), terminateChild(receiver)]);
+    if (!succeeded && sessionSlug && sessionOwnerToken) {
+      const cancellation = new AbortController();
+      const cancellationTimeout = setTimeout(() => cancellation.abort(), 5_000);
+      try {
+        const response = await fetch(`${options.workerUrl.replace(/\/$/, "")}/api/tunnels/${sessionSlug}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${sessionOwnerToken}` },
+          signal: cancellation.signal,
+        });
+        record("harness", "internal", process.pid, {
+          event: "cleanup",
+          phase: "tunnel-cancel",
+          status: response.ok || response.status === 404 ? "complete" : "failed",
+          httpStatus: response.status,
+        });
+      } catch (cause) {
+        record("harness", "internal", process.pid, {
+          event: "cleanup",
+          phase: "tunnel-cancel",
+          status: "failed",
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      } finally {
+        clearTimeout(cancellationTimeout);
+      }
+    }
+    await Promise.all([terminateChild(sender), terminateChild(receiver, 6_000)]);
     await rm(temporaryRoot, { recursive: true, force: true });
     await artifactWrites;
     if (succeeded) await rm(artifactPath, { force: true });

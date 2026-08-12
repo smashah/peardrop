@@ -174,16 +174,38 @@ const hexToBytes = (hex: string): Uint8Array => {
 };
 
 const write = (
-  socket: { write: (data: Uint8Array) => boolean; once: (event: "drain", listener: () => void) => void; removeListener: (event: "drain", listener: () => void) => void },
+  socket: {
+    write: (data: Uint8Array) => boolean;
+    once: (event: string, listener: (cause?: unknown) => void) => void;
+    removeListener: (event: string, listener: (cause?: unknown) => void) => void;
+  },
   data: Uint8Array,
   error: RelaySenderError
 ) => Effect.suspend(() => {
   if (socket.write(data)) return Effect.void;
   return Effect.callback<void, RelaySenderError>((resume) => {
-    const onDrain = () => resume(Effect.void);
+    const cleanup = () => {
+      socket.removeListener("drain", onDrain);
+      socket.removeListener("error", onError);
+      socket.removeListener("close", onClose);
+    };
+    const onDrain = () => {
+      cleanup();
+      resume(Effect.void);
+    };
+    const onError = () => {
+      cleanup();
+      resume(Effect.fail(error));
+    };
+    const onClose = () => {
+      cleanup();
+      resume(Effect.fail(error));
+    };
     socket.once("drain", onDrain);
-    return Effect.sync(() => socket.removeListener("drain", onDrain));
-  }).pipe(Effect.mapError(() => error));
+    socket.once("error", onError);
+    socket.once("close", onClose);
+    return Effect.sync(cleanup);
+  });
 });
 
 const withTimeout = <A, E>(effect: Effect.Effect<A, E>, durationMs: number, error: RelaySenderError) =>
@@ -294,14 +316,18 @@ const attemptTransfer = (
     timeoutMs,
     failure("socket-open", "Relay WebSocket connection timed out")
   ));
+  yield* Effect.addFinalizer(() => Effect.sync(() => socket.close()));
 
   const stream = new Stream(true, socket as unknown as WebSocketLike);
   const dht = new DHT(stream, { custodial });
+  const destroyDht = (dht as typeof dht & { destroy?: () => void }).destroy;
+  yield* Effect.addFinalizer(() => Effect.sync(() => destroyDht?.call(dht)));
   const peer = dht.connect(hexToBytes(request.descriptor.publicKey));
   const peerEvents = peer as typeof peer & {
     on(event: "error", listener: (error: unknown) => void): void;
     removeListener(event: "error", listener: (error: unknown) => void): void;
   };
+  yield* Effect.addFinalizer(() => Effect.sync(() => peer.destroy()));
   yield* runPhase(context, "dht-connect", withTimeout(
     Effect.tryPromise({
       try: () => peer.opened,
@@ -378,14 +404,14 @@ const attemptTransfer = (
     yield* Effect.forEach(incomingFibers, Fiber.interrupt, { discard: true });
     peer.removeListener("data", onData);
     peerEvents.removeListener("error", onError);
-    peer.destroy();
-    socket.close();
     yield* report(context, {
       phase: "teardown",
       status: "complete",
       durationMs: Math.max(0, Math.round(context.now() - teardownStartedAt)),
     });
   }));
+  const boundedWrite = (data: Uint8Array, error: RelaySenderError) =>
+    withTimeout(write(peer, data, error), timeoutMs, error);
 
   const manifests = yield* Effect.forEach(request.files, (file, fileIndex) => runPhase(
     context,
@@ -395,13 +421,11 @@ const attemptTransfer = (
       Effect.map((digest) => ({ name: file.name, bytes: file.size, sha256: digest }))
     )
   ));
-  yield* runPhase(context, "hello", write(
-    peer,
+  yield* runPhase(context, "hello", boundedWrite(
     jsonFrame(FrameType.HELLO, { v: 1, pin: request.pin }),
     failure("hello", "Could not write PDWP HELLO")
   ));
-  yield* runPhase(context, "manifest", write(
-    peer,
+  yield* runPhase(context, "manifest", boundedWrite(
     jsonFrame(FrameType.MANIFEST, {
       files: manifests,
       totalBytes: manifests.reduce((total, file) => total + file.bytes, 0),
@@ -440,7 +464,7 @@ const attemptTransfer = (
         if (next.done) break;
         for (let chunkOffset = 0; chunkOffset < next.value.byteLength; chunkOffset += CHUNK_BYTES) {
           const chunk = next.value.slice(chunkOffset, chunkOffset + CHUNK_BYTES);
-          yield* write(peer, fileFrame(fileIndex, offset, chunk), failure("bytes", `Could not send ${file.name}`));
+          yield* boundedWrite(fileFrame(fileIndex, offset, chunk), failure("bytes", `Could not send ${file.name}`));
           offset += chunk.byteLength;
           yield* report(context, { phase: "bytes", status: "progress", fileIndex, bytesSent: offset, totalBytes: file.size });
         }
@@ -451,8 +475,7 @@ const attemptTransfer = (
     if (offset !== manifests[fileIndex]?.bytes) {
       return yield* Effect.fail(failure("bytes", `${file.name} changed while sending`, false));
     }
-    yield* runPhase(context, "file-end", write(
-      peer,
+    yield* runPhase(context, "file-end", boundedWrite(
       jsonFrame(FrameType.FILE_END, { fileIndex, sha256: manifests[fileIndex]?.sha256 }),
       failure("file-end", `Could not finalize ${file.name}`)
     ));

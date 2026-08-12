@@ -1,6 +1,6 @@
 # PearDrop CLI
 
-PearDrop creates short-lived, end-to-end encrypted file and secret drops over HyperDHT Noise connections.
+PearDrop creates short-lived file and secret drops. Direct CLI transfers are end-to-end encrypted over HyperDHT Noise connections; Relay transfers report whether they used non-custodial forwarding or custodial fallback.
 
 ```bash
 npx --yes @peardrop/cli@latest receive --target ./inbox
