@@ -159,6 +159,29 @@ const adapters = {
   })(),
 };
 
+const expectFirstAttemptTornDownBeforeFallback = () => {
+  const teardownStart = resourceEvents.indexOf("teardown-start:1");
+  const teardownComplete = resourceEvents.indexOf("teardown-complete:1");
+  const fallbackTicket = resourceEvents.indexOf("ticket:2");
+  expect(teardownStart).toBeGreaterThanOrEqual(0);
+  expect(teardownComplete).toBeGreaterThan(teardownStart);
+  expect(fallbackTicket).toBeGreaterThanOrEqual(0);
+  expect(teardownComplete).toBeLessThan(fallbackTicket);
+  for (const completedDuringTeardown of [
+    "peer-destroy:1",
+    "peer-listener-remove:1:data",
+    "peer-listener-remove:1:error",
+    "peer-listener-remove:1:close",
+    "dht-destroy:1",
+    "socket-listener-remove:1:close",
+    "socket-close:1",
+  ]) {
+    expect(resourceEvents).toContain(completedDuringTeardown);
+    expect(resourceEvents.indexOf(completedDuringTeardown)).toBeGreaterThan(teardownStart);
+    expect(resourceEvents.indexOf(completedDuringTeardown)).toBeLessThan(teardownComplete);
+  }
+};
+
 beforeEach(() => {
   writes.length = 0;
   custodialModes.length = 0;
@@ -248,22 +271,7 @@ describe("shared Relay sender", () => {
       && event.reason === "pre-accept-connection-failed"
     )).toBe(true);
 
-    const fallbackTicket = resourceEvents.indexOf("ticket:2");
-    expect(fallbackTicket).toBeGreaterThanOrEqual(0);
-    expect(resourceEvents.indexOf("teardown-start:1")).toBeLessThan(resourceEvents.indexOf("peer-destroy:1"));
-    for (const completedBeforeFallback of [
-      "peer-destroy:1",
-      "peer-listener-remove:1:data",
-      "peer-listener-remove:1:error",
-      "peer-listener-remove:1:close",
-      "dht-destroy:1",
-      "socket-listener-remove:1:close",
-      "socket-close:1",
-      "teardown-complete:1",
-    ]) {
-      expect(resourceEvents).toContain(completedBeforeFallback);
-      expect(resourceEvents.indexOf(completedBeforeFallback)).toBeLessThan(fallbackTicket);
-    }
+    expectFirstAttemptTornDownBeforeFallback();
 
     expect(events.some((event) =>
       event.attempt === 1
@@ -306,6 +314,59 @@ describe("shared Relay sender", () => {
       phase: "fallback",
       reason: "pre-accept-connection-failed",
     }));
+  });
+
+  it("interrupts hashing and falls back when the preferred peer closes", async () => {
+    let firstHashStarted!: () => void;
+    const hashingStarted = new Promise<void>((resolve) => {
+      firstHashStarted = resolve;
+    });
+    let hashingStreamAttempt = 0;
+    const gatedHashFile = {
+      ...file,
+      stream: () => {
+        hashingStreamAttempt += 1;
+        if (hashingStreamAttempt !== 1) return file.stream();
+        return new ReadableStream<Uint8Array>({
+          start() {
+            firstHashStarted();
+          },
+        });
+      },
+    };
+    const events: Array<{ phase: string; status: string; reason?: string; attempt: number }> = [];
+    const send = Effect.runPromise(Effect.scoped(sendRelay({
+      descriptor,
+      files: [gatedHashFile],
+      acceptTimeoutMs: 1_000,
+      onEvent: (event) => {
+        events.push(event);
+        if (event.phase === "teardown") resourceEvents.push(`teardown-${event.status}:${event.attempt}`);
+      },
+    }, adapters)));
+
+    await hashingStarted;
+    peers[0]!.emit("close");
+    const result = await send;
+
+    expect(result.mode).toBe("custodial-fallback");
+    expect(result.files).toEqual(deliveredFiles);
+    expect(events).toContainEqual(expect.objectContaining({
+      phase: "fallback",
+      reason: "pre-accept-connection-failed",
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      attempt: 1,
+      phase: "hashing",
+      status: "failed",
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({
+      attempt: 1,
+      phase: "hashing",
+      status: "complete",
+    }));
+    expect(writes.filter(({ attempt }) => attempt === 1)).toHaveLength(0);
+    expectFirstAttemptTornDownBeforeFallback();
   });
 
   it("fails at ACCEPT without custodial fallback when non-custodial-only is required", async () => {

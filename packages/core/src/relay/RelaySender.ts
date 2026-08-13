@@ -387,13 +387,15 @@ const attemptTransferScoped = (
   }));
   const guardPeerConnection = <A>(effect: Effect.Effect<A, RelaySenderError>) =>
     Effect.raceFirst(effect, Deferred.await(peerConnectionFailed));
+  const guardConnection = <A>(phase: RelayPhase, effect: Effect.Effect<A, RelaySenderError>) =>
+    guardTransport(phase, guardPeerConnection(effect));
   yield* runPhase(context, "dht-connect", withTimeout(
-    guardTransport("dht-connect", guardPeerConnection(Effect.tryPromise({
+    guardConnection("dht-connect", Effect.tryPromise({
       try: () => peer.opened,
       catch: (cause) => failure("dht-connect", cause instanceof Error ? cause.message : "Relay DHT connection failed"),
     }).pipe(Effect.flatMap((opened) => opened
       ? Effect.void
-      : Effect.fail(failure("dht-connect", "Relay DHT connection closed before opening")))))),
+      : Effect.fail(failure("dht-connect", "Relay DHT connection closed before opening"))))),
     timeoutMs,
     failure("dht-connect", "Relay DHT connection timed out")
   ));
@@ -456,14 +458,17 @@ const attemptTransferScoped = (
     peer.removeListener("data", onData);
   }));
   const boundedWrite = (data: Uint8Array, error: RelaySenderError) =>
-    withTimeout(guardTransport(error.phase, guardPeerConnection(write(peer, data, error))), timeoutMs, error);
+    withTimeout(guardConnection(error.phase, write(peer, data, error)), timeoutMs, error);
 
   const manifests = yield* Effect.forEach(request.files, (file, fileIndex) => runPhase(
     context,
     "hashing",
-    hashFile(file, failure("hashing", `Could not hash ${file.name}`, false)).pipe(
-      Effect.tap(() => report(context, { phase: "hashing", status: "progress", fileIndex, fileCount: request.files.length })),
-      Effect.map((digest) => ({ name: file.name, bytes: file.size, sha256: digest }))
+    guardConnection(
+      "hashing",
+      hashFile(file, failure("hashing", `Could not hash ${file.name}`, false)).pipe(
+        Effect.tap(() => report(context, { phase: "hashing", status: "progress", fileIndex, fileCount: request.files.length })),
+        Effect.map((digest) => ({ name: file.name, bytes: file.size, sha256: digest }))
+      )
     )
   ));
   yield* runPhase(context, "hello", boundedWrite(
@@ -479,7 +484,7 @@ const attemptTransferScoped = (
     failure("manifest", "Could not write PDWP MANIFEST")
   ));
 
-  yield* runPhase(context, "accept", guardTransport("accept", guardPeerConnection(Effect.gen(function* () {
+  yield* runPhase(context, "accept", guardConnection("accept", Effect.gen(function* () {
     const acceptStartedAt = context.now();
     let waitedMs = 0;
     yield* report(context, { phase: "accept", status: "progress", waitedMs, timeoutMs });
@@ -494,7 +499,7 @@ const attemptTransferScoped = (
       yield* report(context, { phase: "accept", status: "progress", waitedMs, timeoutMs });
     }
     return yield* Effect.fail(failure("accept", ACCEPT_TIMEOUT_MESSAGE));
-  }))));
+  })));
 
   for (const [fileIndex, file] of request.files.entries()) {
     const reader = file.stream().getReader();
@@ -535,7 +540,7 @@ const attemptTransferScoped = (
   }
 
   const delivered = yield* runPhase(context, "done", withTimeout(
-    guardTransport("done", guardPeerConnection(Deferred.await(done))),
+    guardConnection("done", Deferred.await(done)),
     timeoutMs,
     failure("done", "Receiver did not confirm delivery in time")
   ));
