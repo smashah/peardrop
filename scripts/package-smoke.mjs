@@ -101,6 +101,19 @@ if (!cliHelp.stdout.includes("PearDrop")) {
   throw new Error("Installed peardrop executable did not render its help output");
 }
 
+for (const runtime of [
+  "node_modules/@peardrop/core/dist/relay/dhtRelayRuntime.js",
+  "node_modules/@peardrop/cli/dist/commands/test/nc.js",
+]) {
+  const installedRelayRuntime = await readFile(resolve(installDirectory, runtime), "utf8");
+  const completedHandshakeGuards = installedRelayRuntime.match(/if \(this\.complete\) return/g) ?? [];
+  if (completedHandshakeGuards.length !== 2) {
+    throw new Error(
+      `${runtime} must contain both completed-handshake guards; found ${completedHandshakeGuards.length}`,
+    );
+  }
+}
+
 const importCore = spawnSync(
   "node",
   ["--input-type=module", "--eval", 'await import("@peardrop/core"); await import("@peardrop/core/node");'],
