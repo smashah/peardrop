@@ -101,6 +101,18 @@ if (!cliHelp.stdout.includes("PearDrop")) {
   throw new Error("Installed peardrop executable did not render its help output");
 }
 
+const ncHelp = spawnSync(resolve(installDirectory, "node_modules/.bin/peardrop"), ["test", "nc", "--help"], {
+  cwd: installDirectory,
+  encoding: "utf8",
+});
+if (ncHelp.status !== 0) {
+  process.stderr.write(ncHelp.stderr || ncHelp.stdout);
+  process.exit(ncHelp.status ?? 1);
+}
+if (!ncHelp.stdout.includes("--verbose")) {
+  throw new Error("Installed test nc command did not expose --verbose");
+}
+
 for (const runtime of [
   "node_modules/@peardrop/core/dist/relay/dhtRelayRuntime.js",
   "node_modules/@peardrop/cli/dist/commands/test/nc.js",

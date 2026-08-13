@@ -12,6 +12,8 @@ let streamCancelCount = 0;
 let streamInvocationCount = 0;
 let deliveredFiles = [{ name: "message.txt", bytes: 5, sha256: "abc" }];
 let failDhtConnectWithError = false;
+let holdDhtConnectOpen = false;
+let closeWebSocketAfterOpen = false;
 
 vi.mock("@hyperswarm/dht-relay/ws", () => ({ default: class RelayStream {} }));
 vi.mock("@hyperswarm/dht-relay", () => ({
@@ -27,7 +29,9 @@ vi.mock("@hyperswarm/dht-relay", () => ({
         write: (frame: Uint8Array) => boolean;
         destroy: () => void;
       };
-      peer.opened = failDhtConnectWithError
+      peer.opened = holdDhtConnectOpen
+        ? new Promise(() => undefined)
+        : failDhtConnectWithError
         ? new Promise((_, reject) => queueMicrotask(() => {
           const error = new Error("HOLEPUNCH_ABORTED");
           peer.emit("error", error);
@@ -74,7 +78,12 @@ class MockWebSocket extends EventTarget {
   readonly readyState = 1;
   constructor() {
     super();
-    queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    queueMicrotask(() => {
+      this.dispatchEvent(new Event("open"));
+      if (closeWebSocketAfterOpen) {
+        setTimeout(() => this.dispatchEvent(Object.assign(new Event("close"), { code: 1005, reason: "" })), 0);
+      }
+    });
   }
   send() {}
   close() {
@@ -122,6 +131,8 @@ beforeEach(() => {
   streamInvocationCount = 0;
   deliveredFiles = [{ name: "message.txt", bytes: 5, sha256: "abc" }];
   failDhtConnectWithError = false;
+  holdDhtConnectOpen = false;
+  closeWebSocketAfterOpen = false;
 });
 
 describe("shared Relay sender", () => {
@@ -224,5 +235,20 @@ describe("shared Relay sender", () => {
 
     expect(exit._tag).toBe("Failure");
     expect(String(exit)).toContain("HOLEPUNCH_ABORTED");
+  });
+
+  it("fails DHT connect when the opened relay WebSocket closes", async () => {
+    holdDhtConnectOpen = true;
+    closeWebSocketAfterOpen = true;
+    const exit = await Effect.runPromiseExit(Effect.scoped(sendRelay({
+      descriptor,
+      files: [file],
+      fallback: "none",
+      acceptTimeoutMs: 25,
+    }, adapters)));
+
+    expect(exit._tag).toBe("Failure");
+    expect(String(exit)).toContain("Relay WebSocket closed during transfer (code 1005)");
+    expect(String(exit)).not.toContain("timed out");
   });
 });

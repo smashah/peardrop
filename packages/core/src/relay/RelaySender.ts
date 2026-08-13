@@ -317,6 +317,29 @@ const attemptTransfer = (
   ));
   yield* Effect.addFinalizer(() => Effect.sync(() => socket.close()));
 
+  const transportClosed = yield* Deferred.make<never, string>();
+  const onSocketClose = (event: unknown) => {
+    const code = typeof (event as { code?: unknown })?.code === "number"
+      ? ` (code ${(event as { code: number }).code})`
+      : "";
+    Effect.runFork(Deferred.fail(transportClosed, `Relay WebSocket closed during transfer${code}`));
+  };
+  const onSocketError = (event: unknown) => {
+    const message = event instanceof Error ? `: ${event.message}` : "";
+    Effect.runFork(Deferred.fail(transportClosed, `Relay WebSocket failed during transfer${message}`));
+  };
+  socket.addEventListener("close", onSocketClose, { once: true });
+  socket.addEventListener("error", onSocketError, { once: true });
+  yield* Effect.addFinalizer(() => Effect.sync(() => {
+    socket.removeEventListener("close", onSocketClose);
+    socket.removeEventListener("error", onSocketError);
+  }));
+  const guardTransport = <A>(phase: RelayPhase, effect: Effect.Effect<A, RelaySenderError>) =>
+    Effect.raceFirst(
+      effect,
+      Deferred.await(transportClosed).pipe(Effect.mapError((message) => failure(phase, message)))
+    );
+
   const stream = new Stream(true, socket as unknown as WebSocketLike);
   const dht = new DHT(stream, { custodial });
   const destroyDht = (dht as typeof dht & { destroy?: () => void }).destroy;
@@ -339,12 +362,12 @@ const attemptTransfer = (
   yield* Effect.addFinalizer(() => Effect.sync(() => peer.destroy()));
   yield* Effect.addFinalizer(() => Effect.sync(() => peerEvents.removeListener("error", onError)));
   yield* runPhase(context, "dht-connect", withTimeout(
-    Effect.tryPromise({
+    guardTransport("dht-connect", Effect.tryPromise({
       try: () => peer.opened,
       catch: (cause) => failure("dht-connect", cause instanceof Error ? cause.message : "Relay DHT connection failed"),
     }).pipe(Effect.flatMap((opened) => opened
       ? Effect.void
-      : Effect.fail(failure("dht-connect", "Relay DHT connection closed before opening")))),
+      : Effect.fail(failure("dht-connect", "Relay DHT connection closed before opening"))))),
     timeoutMs,
     failure("dht-connect", "Relay DHT connection timed out")
   ));
@@ -410,7 +433,7 @@ const attemptTransfer = (
     });
   }));
   const boundedWrite = (data: Uint8Array, error: RelaySenderError) =>
-    withTimeout(write(peer, data, error), timeoutMs, error);
+    withTimeout(guardTransport(error.phase, write(peer, data, error)), timeoutMs, error);
 
   const manifests = yield* Effect.forEach(request.files, (file, fileIndex) => runPhase(
     context,
@@ -433,7 +456,7 @@ const attemptTransfer = (
     failure("manifest", "Could not write PDWP MANIFEST")
   ));
 
-  yield* runPhase(context, "accept", Effect.gen(function* () {
+  yield* runPhase(context, "accept", guardTransport("accept", Effect.gen(function* () {
     const acceptStartedAt = context.now();
     let waitedMs = 0;
     yield* report(context, { phase: "accept", status: "progress", waitedMs, timeoutMs });
@@ -448,7 +471,7 @@ const attemptTransfer = (
       yield* report(context, { phase: "accept", status: "progress", waitedMs, timeoutMs });
     }
     return yield* Effect.fail(failure("accept", ACCEPT_TIMEOUT_MESSAGE));
-  }));
+  })));
 
   for (const [fileIndex, file] of request.files.entries()) {
     const reader = file.stream().getReader();
@@ -489,7 +512,7 @@ const attemptTransfer = (
   }
 
   const delivered = yield* runPhase(context, "done", withTimeout(
-    Deferred.await(done),
+    guardTransport("done", Deferred.await(done)),
     timeoutMs,
     failure("done", "Receiver did not confirm delivery in time")
   ));
