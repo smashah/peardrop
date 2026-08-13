@@ -16,6 +16,13 @@
 
 
 
+
+## 1.5.10
+<sub>2026-08-13</sub>
+
+- [#73](https://github.com/smashah/peardrop/pull/73) [`5e68080`](https://github.com/smashah/peardrop/commit/5e68080fcc782b303aecba7924c551d142bffeb3)  *(patch)*
+  Wait within the existing relay-resolution deadline for a freshly announced receiver to become discoverable before rejecting its authenticated ticket.
+
 ## 1.5.9
 <sub>2026-08-13</sub>
 
