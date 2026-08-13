@@ -19,6 +19,9 @@ const RelayDht = DhtRelayDefault as unknown as new (
 
 const dhtState = vi.hoisted(() => ({
   connectOutcome: "open" as "open" | "error" | "close" | "pending",
+  connectCalls: 0,
+  findPeerOutcome: "found" as "found" | "missing" | "pending",
+  findPeerCalls: 0,
   instances: [] as Array<{ resolveReady(): void }>,
   readyImmediately: false,
 }));
@@ -46,6 +49,7 @@ vi.mock("hyperdht", async () => {
       }
 
       connect(): EventEmitter & { destroy(): void } {
+        dhtState.connectCalls += 1;
         const stream = new EventEmitter() as EventEmitter & { destroy(): void };
         stream.destroy = () => stream.emit("close");
         setImmediate(() => {
@@ -54,6 +58,26 @@ vi.mock("hyperdht", async () => {
           else stream.emit(dhtState.connectOutcome);
         });
         return stream;
+      }
+
+      findPeer(): AsyncIterable<{ peer: { publicKey: Buffer } }> & { destroy(): void } {
+        dhtState.findPeerCalls += 1;
+        let releasePending: (() => void) | undefined;
+        return {
+          destroy() {
+            releasePending?.();
+          },
+          async *[Symbol.asyncIterator]() {
+            if (dhtState.findPeerOutcome === "found") {
+              yield { peer: { publicKey: Buffer.alloc(32, 0xab) } };
+            }
+            if (dhtState.findPeerOutcome === "pending") {
+              await new Promise<void>((resolve) => {
+                releasePending = resolve;
+              });
+            }
+          },
+        };
       }
 
       async destroy(): Promise<void> {}
@@ -134,7 +158,11 @@ describe("@peardrop/relay runtime contract", () => {
     process.env.PORT = "0";
     process.env.RELAY_TICKET_SECRET = ticketSecret;
     process.env.FLY_REGION = "lhr";
+    process.env.RELAY_RESOLVE_TIMEOUT_MS = "25";
     dhtState.connectOutcome = "open";
+    dhtState.connectCalls = 0;
+    dhtState.findPeerOutcome = "found";
+    dhtState.findPeerCalls = 0;
     dhtState.instances = [];
     dhtState.readyImmediately = false;
   });
@@ -152,6 +180,7 @@ describe("@peardrop/relay runtime contract", () => {
     delete process.env.PORT;
     delete process.env.RELAY_TICKET_SECRET;
     delete process.env.FLY_REGION;
+    delete process.env.RELAY_RESOLVE_TIMEOUT_MS;
   });
 
   it("exposes /resolve and rejects a missing ticket", async () => {
@@ -196,6 +225,44 @@ describe("@peardrop/relay runtime contract", () => {
     const response = await fetch(`${baseUrl(server)}/resolve?ticket=${signTicket()}`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ reachable: true, region: "lhr" });
+    expect(dhtState.findPeerCalls).toBe(1);
+    expect(dhtState.connectCalls).toBe(0);
+  });
+
+  it("rejects /resolve before DHT readiness without starting a lookup", async () => {
+    const server = await startServer();
+    const response = await fetch(`${baseUrl(server)}/resolve?ticket=${signTicket()}`);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ reachable: false, region: "lhr" });
+    expect(dhtState.findPeerCalls).toBe(0);
+    expect(dhtState.connectCalls).toBe(0);
+  });
+
+  it("rejects /resolve when a non-destructive DHT lookup cannot find the peer", async () => {
+    dhtState.readyImmediately = true;
+    dhtState.findPeerOutcome = "missing";
+    const server = await startServer();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const response = await fetch(`${baseUrl(server)}/resolve?ticket=${signTicket()}`);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ reachable: false, region: "lhr" });
+    expect(dhtState.findPeerCalls).toBe(1);
+    expect(dhtState.connectCalls).toBe(0);
+  });
+
+  it("bounds a non-destructive DHT lookup that does not settle", async () => {
+    dhtState.readyImmediately = true;
+    dhtState.findPeerOutcome = "pending";
+    const server = await startServer();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const response = await fetch(`${baseUrl(server)}/resolve?ticket=${signTicket()}`);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ reachable: false, region: "lhr" });
+    expect(dhtState.findPeerCalls).toBe(1);
+    expect(dhtState.connectCalls).toBe(0);
   });
 
   it("does not reject a valid ticket before its non-custodial WebSocket handoff", async () => {
