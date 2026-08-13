@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { extname, relative, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 const root = resolve(import.meta.dirname, "..");
@@ -169,18 +170,72 @@ if (runtimeFailure) {
   throw new Error(`Installed browser relay runtime failed its first Noise send: ${runtimeFailure}`);
 }
 
-// Pin the pure-JavaScript Ed25519 implementation to a sodium-native vector.
-// This catches a browser shim that merely avoids throwing but derives a
-// different Noise shared secret from the native HyperDHT peer.
+// Compare the exact function shipped in the clean-installed browser bundle to
+// sodium-native. The positive set exercises arbitrary no-clamp scalars; the
+// negative set guards the untrusted remote-key validation contract.
 const requireFromCore = createRequire(resolve(root, "packages/core/package.json"));
-const browserSodium = requireFromCore("sodium-javascript");
-const publicKey = Buffer.from("4d8710b240b8f27cd3160ae2022386faf66e670c82617230f2a6adb46536f876", "hex");
-const scalar = Buffer.from("e4a7c0ce4b55fd4642fa655d5fd5f75058688ee8bd06e601593399dbce9458b5", "hex");
-const expectedSharedSecret = "81406c67d4490232ed84280d55b37ffeb6491fcc874d24dc23a8a0ad6db4ccbd";
-const sharedSecret = Buffer.alloc(32);
-browserSodium.crypto_scalarmult_ed25519(sharedSecret, scalar, publicKey);
-if (sharedSecret.toString("hex") !== expectedSharedSecret) {
-  throw new Error("Browser Ed25519 DH did not match the sodium-native compatibility vector");
+const nativeSodium = requireFromCore("sodium-native");
+const deterministicBytes = (label) => createHash("sha256").update(label).digest();
+for (let index = 0; index < 64; index++) {
+  const seed = deterministicBytes(`peardrop-ed25519-seed-${index}`);
+  const scalar = deterministicBytes(`peardrop-ed25519-scalar-${index}`);
+  const publicKey = Buffer.alloc(32);
+  const secretKey = Buffer.alloc(64);
+  nativeSodium.crypto_sign_seed_keypair(publicKey, secretKey, seed);
+  const expected = Buffer.alloc(32);
+  const actual = Buffer.alloc(32);
+  nativeSodium.crypto_scalarmult_ed25519_noclamp(expected, scalar, publicKey);
+  installedRuntime.cryptoScalarmultEd25519Noclamp(actual, scalar, publicKey);
+  if (!actual.equals(expected)) {
+    throw new Error(`Installed browser Ed25519 DH diverged from sodium-native at vector ${index}`);
+  }
+}
+
+const rejectedPublicKeys = [
+  "0100000000000000000000000000000000000000000000000000000000000000",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+  "0000000000000000000000000000000000000000000000000000000000000080",
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+  "0000000000000000000000000000000000000000000000000000000000000000",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+  "98519eadf35b995233b51b5cd23e9cc5a28b639b5a4af0ec903cb960d81b7819",
+  "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+];
+const nonzeroScalar = Buffer.alloc(32);
+nonzeroScalar[0] = 5;
+for (const encodedPublicKey of rejectedPublicKeys) {
+  const publicKey = Buffer.from(encodedPublicKey, "hex");
+  for (const [implementation, multiply] of [
+    ["sodium-native", nativeSodium.crypto_scalarmult_ed25519_noclamp],
+    ["installed browser runtime", installedRuntime.cryptoScalarmultEd25519Noclamp],
+  ]) {
+    let rejected = false;
+    try {
+      multiply(Buffer.alloc(32), nonzeroScalar, publicKey);
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error(`${implementation} accepted invalid Ed25519 point ${encodedPublicKey}`);
+  }
+}
+
+const validPublicKey = Buffer.alloc(32);
+const validSecretKey = Buffer.alloc(64);
+nativeSodium.crypto_sign_seed_keypair(validPublicKey, validSecretKey, deterministicBytes("peardrop-ed25519-zero"));
+for (const [implementation, multiply] of [
+  ["sodium-native", nativeSodium.crypto_scalarmult_ed25519_noclamp],
+  ["installed browser runtime", installedRuntime.cryptoScalarmultEd25519Noclamp],
+]) {
+  let rejected = false;
+  try {
+    multiply(Buffer.alloc(32), Buffer.alloc(32), validPublicKey);
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) throw new Error(`${implementation} accepted the zero Ed25519 scalar`);
 }
 
 const importCore = spawnSync(

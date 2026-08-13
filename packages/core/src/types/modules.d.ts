@@ -70,3 +70,12 @@ declare module "@hyperswarm/dht-relay/ws" {
 
   export default Stream;
 }
+
+declare module "sodium-javascript" {
+  interface SodiumJavascript {
+    crypto_scalarmult_ed25519_noclamp(output: Uint8Array, scalar: Uint8Array, publicKey: Uint8Array): void;
+  }
+
+  const sodium: SodiumJavascript;
+  export default sodium;
+}

@@ -11,6 +11,11 @@ allowBuilds:
   sharp: true
   workerd: true
 
+packageExtensions:
+  'sodium-javascript@0.8.0':
+    dependencies:
+      '@noble/curves': 1.9.1
+
 catalog:
   '@effect/platform-bun': 4.0.0-beta.94
   '@effect/platform-node': 4.0.0-beta.94

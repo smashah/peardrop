@@ -1,48 +1,50 @@
 diff --git a/crypto_sign.js b/crypto_sign.js
-index 5278c5d..dcde73e 100644
+index 5278c5d..dcd656a 100644
 --- a/crypto_sign.js
 +++ b/crypto_sign.js
-@@ -17,5 +17,6 @@ const crypto_sign_ed25519_SECRETKEYBYTES = 64
- const crypto_sign_ed25519_SEEDBYTES = 32
+@@ -2,2 +2,3 @@
+ const { crypto_verify_32 } = require('./crypto_verify')
++const { ed25519 } = require('@noble/curves/ed25519')
+ const { crypto_hash } = require('./crypto_hash')
+@@ -18,1 +19,2 @@
  const crypto_sign_ed25519_BYTES = 64
 +const crypto_scalarmult_ed25519_BYTES = 32
- 
- const crypto_sign_BYTES = crypto_sign_ed25519_BYTES
- const crypto_sign_PUBLICKEYBYTES = crypto_sign_ed25519_PUBLICKEYBYTES
-@@ -25,6 +26,8 @@ const crypto_sign_SEEDBYTES = crypto_sign_ed25519_SEEDBYTES
- module.exports = {
+@@ -26,2 +28,4 @@ module.exports = {
    crypto_sign_keypair,
    crypto_sign_seed_keypair,
-+  crypto_scalarmult_ed25519,
++  crypto_scalarmult_ed25519_noclamp,
 +  crypto_scalarmult_ed25519_BYTES,
-   crypto_sign,
-   crypto_sign_detached,
-   crypto_sign_open,
-@@ -118,6 +121,27 @@ function scalarmult (p, q, s) {
-   }
- }
- 
-+// sodium-native exposes this clamped Ed25519 primitive, but the browser
-+// implementation does not. noise-curve-ed supplies a clamped scalar for Noise
-+// DH over HyperDHT's Ed25519 public keys. unpackneg decodes -P, so flip the
-+// encoded sign bit after multiplying to return nP.
-+function crypto_scalarmult_ed25519 (output, scalar, publicKey) {
+@@ -47,1 +51,33 @@ module.exports = {
++const ED25519_SCALAR_MASK = (1n << 255n) - 1n
++
++// Match libsodium's checked no-clamp primitive. Noble supplies strict point
++// decoding and subgroup tests; libsodium ignores the scalar's top bit before
++// multiplying, and group multiplication reduces the remaining value mod L.
++function crypto_scalarmult_ed25519_noclamp (output, scalar, publicKey) {
 +  check(output, crypto_scalarmult_ed25519_BYTES)
 +  check(scalar, crypto_scalarmult_ed25519_BYTES)
 +  check(publicKey, crypto_scalarmult_ed25519_BYTES)
 +
-+  var clamped = new Uint8Array(scalar)
-+  clamped[0] &= 248
-+  clamped[31] &= 127
-+  clamped[31] |= 64
-+  var point = [gf(), gf(), gf(), gf()]
-+  var result = [gf(), gf(), gf(), gf()]
-+  if (!unpackneg(point, publicKey)) throw new Error('Invalid Ed25519 public key')
-+  scalarmult(result, point, clamped)
-+  pack(output, result)
-+  output[31] ^= 0x80
++  const point = ed25519.ExtendedPoint.fromHex(publicKey, false)
++  if (point.isSmallOrder() || !point.isTorsionFree()) {
++    throw new Error('Invalid Ed25519 public key')
++  }
++
++  const scalarValue = readScalarLittleEndian(scalar) & ED25519_SCALAR_MASK
++  const reducedScalar = scalarValue % ed25519.CURVE.n
++  if (reducedScalar === 0n) throw new Error('Invalid Ed25519 scalar')
++
++  const result = point.multiplyUnsafe(reducedScalar)
++  if (result.is0()) throw new Error('Invalid Ed25519 shared secret')
++  output.set(result.toRawBytes())
 +}
 +
- function scalarbase (p, s) {
-   var q = [gf(), gf(), gf(), gf()]
-   set25519(q[0], X)
++function readScalarLittleEndian (scalar) {
++  let value = 0n
++  for (let index = scalar.length - 1; index >= 0; index--) {
++    value = (value << 8n) | BigInt(scalar[index])
++  }
++  return value
++}
++
+ function set25519 (r, a) {

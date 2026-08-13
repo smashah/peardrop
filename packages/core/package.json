@@ -47,6 +47,7 @@
     "@hyperswarm/dht-relay": "catalog:",
     "@effect/vitest": "catalog:",
     "esbuild": "^0.28.1",
+    "sodium-native": "5.1.0",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
