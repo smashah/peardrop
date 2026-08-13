@@ -52,3 +52,5 @@ catalog:
 
 patchedDependencies:
   '@hyperswarm/dht-relay@0.4.3': patches/@hyperswarm__dht-relay@0.4.3.patch
+  'noise-curve-ed@2.1.0': patches/noise-curve-ed@2.1.0.patch
+  'sodium-javascript@0.8.0': patches/sodium-javascript@0.8.0.patch

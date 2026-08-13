@@ -1,0 +1,48 @@
+diff --git a/crypto_sign.js b/crypto_sign.js
+index 5278c5d..dcde73e 100644
+--- a/crypto_sign.js
++++ b/crypto_sign.js
+@@ -17,5 +17,6 @@ const crypto_sign_ed25519_SECRETKEYBYTES = 64
+ const crypto_sign_ed25519_SEEDBYTES = 32
+ const crypto_sign_ed25519_BYTES = 64
++const crypto_scalarmult_ed25519_BYTES = 32
+ 
+ const crypto_sign_BYTES = crypto_sign_ed25519_BYTES
+ const crypto_sign_PUBLICKEYBYTES = crypto_sign_ed25519_PUBLICKEYBYTES
+@@ -25,6 +26,8 @@ const crypto_sign_SEEDBYTES = crypto_sign_ed25519_SEEDBYTES
+ module.exports = {
+   crypto_sign_keypair,
+   crypto_sign_seed_keypair,
++  crypto_scalarmult_ed25519,
++  crypto_scalarmult_ed25519_BYTES,
+   crypto_sign,
+   crypto_sign_detached,
+   crypto_sign_open,
+@@ -118,6 +121,27 @@ function scalarmult (p, q, s) {
+   }
+ }
+ 
++// sodium-native exposes this clamped Ed25519 primitive, but the browser
++// implementation does not. noise-curve-ed supplies a clamped scalar for Noise
++// DH over HyperDHT's Ed25519 public keys. unpackneg decodes -P, so flip the
++// encoded sign bit after multiplying to return nP.
++function crypto_scalarmult_ed25519 (output, scalar, publicKey) {
++  check(output, crypto_scalarmult_ed25519_BYTES)
++  check(scalar, crypto_scalarmult_ed25519_BYTES)
++  check(publicKey, crypto_scalarmult_ed25519_BYTES)
++
++  var clamped = new Uint8Array(scalar)
++  clamped[0] &= 248
++  clamped[31] &= 127
++  clamped[31] |= 64
++  var point = [gf(), gf(), gf(), gf()]
++  var result = [gf(), gf(), gf(), gf()]
++  if (!unpackneg(point, publicKey)) throw new Error('Invalid Ed25519 public key')
++  scalarmult(result, point, clamped)
++  pack(output, result)
++  output[31] ^= 0x80
++}
++
+ function scalarbase (p, s) {
+   var q = [gf(), gf(), gf(), gf()]
+   set25519(q[0], X)

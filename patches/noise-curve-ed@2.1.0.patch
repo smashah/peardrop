@@ -1,0 +1,24 @@
+diff --git a/index.js b/index.js
+index 7554e8d..54da8f4 100644
+--- a/index.js
++++ b/index.js
+@@ -4,8 +4,13 @@ const assert = require('nanoassert')
+ const b4a = require('b4a')
+ 
+-const DHLEN = sodium.crypto_scalarmult_ed25519_BYTES
+-const PKLEN = sodium.crypto_scalarmult_ed25519_BYTES
+-const SCALARLEN = sodium.crypto_scalarmult_ed25519_BYTES
++// sodium-javascript implements the Ed25519 operations used below but does not
++// export sodium-native's algorithm-specific byte constant. Browser bundles
++// must use the generic scalar-multiplication size, which is the same 32 bytes.
++const ED25519_BYTES = sodium.crypto_scalarmult_ed25519_BYTES || sodium.crypto_scalarmult_BYTES
++const DHLEN = ED25519_BYTES
++const PKLEN = ED25519_BYTES
++const SCALARLEN = ED25519_BYTES
++const scalarmultEd25519 = sodium.crypto_scalarmult_ed25519_noclamp || sodium.crypto_scalarmult_ed25519
+ const SKLEN = sodium.crypto_sign_SECRETKEYBYTES
+ const ALG = 'Ed25519'
+ 
+@@ -64,1 +69,1 @@ function dh (publicKey, { scalar, secretKey }) {
+-  sodium.crypto_scalarmult_ed25519_noclamp(
++  scalarmultEd25519(

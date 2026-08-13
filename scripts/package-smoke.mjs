@@ -1,6 +1,8 @@
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { extname, relative, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 
 const root = resolve(import.meta.dirname, "..");
 const artifacts = resolve(root, ".artifacts");
@@ -124,6 +126,61 @@ for (const runtime of [
       `${runtime} must contain both completed-handshake guards; found ${completedHandshakeGuards.length}`,
     );
   }
+}
+
+// The relay runtime is pre-bundled for browsers before it is packed. Exercise
+// its first non-custodial Noise send from the clean install: dependency export
+// conditions can differ here even when the workspace's Node runtime is green.
+const installedRuntimePath = resolve(installDirectory, "node_modules/@peardrop/core/dist/relay/dhtRelayRuntime.js");
+const installedRuntime = await import(`${pathToFileURL(installedRuntimePath).href}?smoke=${Date.now()}`);
+class OpenWebSocket extends EventTarget {
+  binaryType = "arraybuffer";
+  readyState = 1;
+  send() {}
+  close() {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this.dispatchEvent(new Event("close"));
+  }
+}
+const relaySocket = new OpenWebSocket();
+const relayStream = new installedRuntime.Stream(true, relaySocket);
+let runtimeFailure;
+relayStream.on("error", (cause) => {
+  runtimeFailure = cause;
+});
+const relayDht = new installedRuntime.default(relayStream, { custodial: false });
+const relayPeer = relayDht.connect(relayDht.defaultKeyPair.publicKey);
+const connectingAlias = relayDht._connecting.keys().next().value;
+try {
+  relayDht._protocol.emit("noiseSend", {
+    id: 1,
+    isInitiator: true,
+    payload: new Uint8Array(),
+    remoteStreamAlias: connectingAlias,
+  });
+} catch (cause) {
+  runtimeFailure = cause;
+} finally {
+  relayPeer.destroy();
+  await relayDht.destroy({ force: true });
+}
+if (runtimeFailure) {
+  throw new Error(`Installed browser relay runtime failed its first Noise send: ${runtimeFailure}`);
+}
+
+// Pin the pure-JavaScript Ed25519 implementation to a sodium-native vector.
+// This catches a browser shim that merely avoids throwing but derives a
+// different Noise shared secret from the native HyperDHT peer.
+const requireFromCore = createRequire(resolve(root, "packages/core/package.json"));
+const browserSodium = requireFromCore("sodium-javascript");
+const publicKey = Buffer.from("4d8710b240b8f27cd3160ae2022386faf66e670c82617230f2a6adb46536f876", "hex");
+const scalar = Buffer.from("e4a7c0ce4b55fd4642fa655d5fd5f75058688ee8bd06e601593399dbce9458b5", "hex");
+const expectedSharedSecret = "81406c67d4490232ed84280d55b37ffeb6491fcc874d24dc23a8a0ad6db4ccbd";
+const sharedSecret = Buffer.alloc(32);
+browserSodium.crypto_scalarmult_ed25519(sharedSecret, scalar, publicKey);
+if (sharedSecret.toString("hex") !== expectedSharedSecret) {
+  throw new Error("Browser Ed25519 DH did not match the sodium-native compatibility vector");
 }
 
 const importCore = spawnSync(
