@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import { RelaySenderError, type RelayLifecycleEvent } from "@peardrop/core/relay
 
 const temporaryPaths: string[] = [];
 const PAYLOAD_FILE = join(tmpdir(), "peardrop-nc-receiver-payload");
+const PAYLOAD_PENDING_FILE = `${PAYLOAD_FILE}.pending`;
 const CANCELLED_FILE = join(tmpdir(), "peardrop-nc-receiver-cancelled");
 
 const exists = async (path: string) => stat(path).then(() => true, () => false);
@@ -77,7 +78,11 @@ const stagePayload = async (invocation: WebSenderInvocation): Promise<string> =>
     }
   }
   const payload = new TextDecoder().decode(Buffer.concat(chunks));
-  await writeFile(PAYLOAD_FILE, payload);
+  // Publish only after the complete payload is flushed. Writing the watched
+  // path directly exposes the truncate-before-write window, allowing the
+  // receiver fixture to consume an empty file and exit successfully.
+  await writeFile(PAYLOAD_PENDING_FILE, payload);
+  await rename(PAYLOAD_PENDING_FILE, PAYLOAD_FILE);
   return payload;
 };
 
@@ -191,6 +196,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
   await rm(PAYLOAD_FILE, { force: true });
+  await rm(PAYLOAD_PENDING_FILE, { force: true });
   await rm(CANCELLED_FILE, { force: true });
 });
 
