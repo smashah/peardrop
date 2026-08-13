@@ -12,6 +12,13 @@
 
 
 
+
+## 1.5.6
+<sub>2026-08-13</sub>
+
+- [#65](https://github.com/smashah/peardrop/pull/65) [`4ebec15`](https://github.com/smashah/peardrop/commit/4ebec1570ca20fba9f73bcf150eaca22aad7d955)  *(patch)*
+  Bundled the guarded relay handshake runtime into published browser and CLI artifacts so duplicate Noise frames after handshake completion cannot re-enter the completed state machine.
+
 ## 1.5.5
 <sub>2026-08-13</sub>
 
