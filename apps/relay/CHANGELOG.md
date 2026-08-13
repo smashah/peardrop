@@ -11,6 +11,13 @@
 
 
 
+
+## 1.5.5
+<sub>2026-08-13</sub>
+
+- [#63](https://github.com/smashah/peardrop/pull/63) [`725500b`](https://github.com/smashah/peardrop/commit/725500befbe3e90172292d0f46a3d08af57fa550)  *(patch)*
+  Fixed relay ticket admission so the browser-key non-custodial connection performs DHT reachability instead of being rejected by an incompatible relay-key preflight, and report DHT connection errors without crashing the sender process.
+
 ## 1.5.4
 <sub>2026-08-13</sub>
 
