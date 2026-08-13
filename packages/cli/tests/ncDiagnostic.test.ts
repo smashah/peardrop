@@ -20,6 +20,19 @@ const CANCELLED_FILE = join(tmpdir(), "peardrop-nc-receiver-cancelled");
 
 const exists = async (path: string) => stat(path).then(() => true, () => false);
 
+interface FixturePayloadPublisher {
+  readonly writePending?: (path: string, payload: string) => Promise<void>;
+  readonly publish?: (pendingPath: string, watchedPath: string) => Promise<void>;
+}
+
+const publishFixturePayload = async (
+  payload: string,
+  publisher: FixturePayloadPublisher = {}
+): Promise<void> => {
+  await (publisher.writePending ?? writeFile)(PAYLOAD_PENDING_FILE, payload);
+  await (publisher.publish ?? rename)(PAYLOAD_PENDING_FILE, PAYLOAD_FILE);
+};
+
 const startWorkerDouble = async (descriptorPublicKey = "a".repeat(64)) => {
   const requests: Array<{ method: string; url: string; authorization?: string }> = [];
   const descriptorFetchesPerSlug = new Map<string, number>();
@@ -81,8 +94,7 @@ const stagePayload = async (invocation: WebSenderInvocation): Promise<string> =>
   // Publish only after the complete payload is flushed. Writing the watched
   // path directly exposes the truncate-before-write window, allowing the
   // receiver fixture to consume an empty file and exit successfully.
-  await writeFile(PAYLOAD_PENDING_FILE, payload);
-  await rename(PAYLOAD_PENDING_FILE, PAYLOAD_FILE);
+  await publishFixturePayload(payload);
   return payload;
 };
 
@@ -201,6 +213,38 @@ afterEach(async () => {
 });
 
 describe("test nc diagnostic safety", () => {
+  it("publishes only a complete fixture payload at the watched path", async () => {
+    const payload = "x".repeat(59);
+    let pendingWritten!: () => void;
+    const pendingReady = new Promise<void>((resolve) => {
+      pendingWritten = resolve;
+    });
+    let releasePublish!: () => void;
+    const publishGate = new Promise<void>((resolve) => {
+      releasePublish = resolve;
+    });
+
+    const publication = publishFixturePayload(payload, {
+      writePending: async (path, value) => {
+        await writeFile(path, value);
+        pendingWritten();
+      },
+      publish: async (pendingPath, watchedPath) => {
+        await publishGate;
+        await rename(pendingPath, watchedPath);
+      },
+    });
+
+    await pendingReady;
+    expect(await exists(PAYLOAD_FILE)).toBe(false);
+    expect(await readFile(PAYLOAD_PENDING_FILE, "utf8")).toBe(payload);
+
+    releasePublish();
+    await publication;
+    expect(await readFile(PAYLOAD_FILE)).toHaveLength(59);
+    expect(await readFile(PAYLOAD_FILE, "utf8")).toBe(payload);
+  });
+
   it("redacts session authority and relay admission material recursively", () => {
     expect(redactDiagnosticValue({
       tunnelId: "safe-slug",
