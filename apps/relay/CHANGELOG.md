@@ -19,7 +19,7 @@
 ## 1.5.9
 <sub>2026-08-13</sub>
 
-- [#71](https://github.com/smashah/peardrop/pull/71) [`84268f4`](https://github.com/smashah/peardrop/commit/84268f4bb88dc0113d5d8636dc7221dabde398a6)  *(patch)*
+- [#71](https://github.com/smashah/peardrop/pull/71) [`43f281e`](https://github.com/smashah/peardrop/commit/43f281e7b12194cbc3a454c60b81dac67325c241)  *(patch)*
   Select a relay region using a bounded, non-destructive DHT peer lookup so the ticket is routed to a region that can reach the receiver without consuming its next connection.
 
 ## 1.5.8
