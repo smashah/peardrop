@@ -10,6 +10,12 @@
 
 
 
+
+## 1.5.4
+<sub>2026-08-13</sub>
+
+- [#61](https://github.com/smashah/peardrop/pull/61) [`1ad4a29`](https://github.com/smashah/peardrop/commit/1ad4a29e08628d154aa48c802be08e487f531584)  *(patch)* - Fixed relay discovery by restoring authenticated peer resolution, DHT-backed health, and exact-region routing.
+
 ## 1.5.3
 <sub>2026-08-13</sub>
 
