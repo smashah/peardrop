@@ -18,6 +18,12 @@
 
 
 
+
+## 1.5.12
+<sub>2026-08-13</sub>
+
+- *(patch)* Version bump from group with `@peardrop/core` v1.5.12, `@peardrop/cli` v1.5.12
+
 ## 1.5.11
 <sub>2026-08-13</sub>
 
