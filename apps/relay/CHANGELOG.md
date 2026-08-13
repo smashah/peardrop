@@ -14,6 +14,13 @@
 
 
 
+
+## 1.5.8
+<sub>2026-08-13</sub>
+
+- [#69](https://github.com/smashah/peardrop/pull/69) [`fdad428`](https://github.com/smashah/peardrop/commit/fdad428e8f1727509b8960655742226c6551a6f1)  *(patch)*
+  Keep accepted relay WebSockets active with control-frame heartbeats while a non-custodial DHT connection is still pending, preventing idle transport closure before the peer path opens.
+
 ## 1.5.7
 <sub>2026-08-13</sub>
 
