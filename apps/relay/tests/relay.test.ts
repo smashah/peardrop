@@ -4,13 +4,21 @@ import { connect } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import DhtRelayDefault from "@hyperswarm/dht-relay";
+import RelayStream, { type WebSocketLike } from "@hyperswarm/dht-relay/ws";
 
 const dhtRelayRuntime = DhtRelayDefault as unknown as {
   relay: (dht: unknown, stream: unknown) => void;
 };
+const RelayDht = DhtRelayDefault as unknown as new (
+  stream: unknown,
+  options: { custodial: boolean }
+) => {
+  connect(publicKey: Buffer): { destroy(): void };
+  destroy(options: { force: boolean }): Promise<void>;
+};
 
 const dhtState = vi.hoisted(() => ({
-  connectOutcome: "open" as "open" | "error" | "close",
+  connectOutcome: "open" as "open" | "error" | "close" | "pending",
   instances: [] as Array<{ resolveReady(): void }>,
   readyImmediately: false,
 }));
@@ -41,6 +49,7 @@ vi.mock("hyperdht", async () => {
         const stream = new EventEmitter() as EventEmitter & { destroy(): void };
         stream.destroy = () => stream.emit("close");
         setImmediate(() => {
+          if (dhtState.connectOutcome === "pending") return;
           if (dhtState.connectOutcome === "error") stream.emit("error", new Error("unreachable"));
           else stream.emit(dhtState.connectOutcome);
         });
@@ -201,6 +210,40 @@ describe("@peardrop/relay runtime contract", () => {
     expect(response.status).toBe(200);
     await openWebSocket(server, `/?ticket=${encodeURIComponent(ticket)}`);
     expect(relaySpy).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the WebSocket alive while its DHT connection is pending", async () => {
+    dhtState.readyImmediately = true;
+    dhtState.connectOutcome = "pending";
+    const server = await startServer();
+    await new Promise((resolve) => setImmediate(resolve));
+    const address = server.httpServer.address();
+    if (!address || typeof address === "string") throw new Error("Relay did not bind a TCP port");
+
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/?ticket=${encodeURIComponent(signTicket())}`);
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    const relayDht = new RelayDht(new RelayStream(true, socket as unknown as WebSocketLike), { custodial: false });
+    const peer = relayDht.connect(Buffer.from("ab".repeat(32), "hex"));
+
+    let idleTimer: ReturnType<typeof setTimeout>;
+    const closeIdleTransport = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => socket.terminate(), 2_500);
+    };
+    socket.on("ping", closeIdleTransport);
+    closeIdleTransport();
+    await new Promise((resolve) => setTimeout(resolve, 2_750));
+
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    clearTimeout(idleTimer);
+    const socketClosed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    peer.destroy();
+    await relayDht.destroy({ force: true });
+    if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+    await socketClosed;
   });
 
   it("rejects WebSocket upgrades until the DHT is ready", async () => {

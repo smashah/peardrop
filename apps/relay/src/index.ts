@@ -56,6 +56,7 @@ const usedTickets = new Map<string, number>();
 const MAX_ACTIVE_SESSIONS_PER_SLUG = 4;
 const MAX_ACTIVE_SESSIONS_PER_IP = 16;
 const MAX_TICKET_CAP_BYTES = 2 * 1024 * 1024 * 1024;
+const TRANSPORT_KEEPALIVE_MS = 2_000;
 
 const startIdleTimeout = (socket: WebSocket) =>
   Effect.runFork(
@@ -265,6 +266,10 @@ export async function startRelayServer(): Promise<RelayServer> {
     let lastReportedBytes = 0;
     const REPORT_INTERVAL = 25 * 1024 * 1024;
     let idleTimeout = startIdleTimeout(ws);
+    const transportKeepAlive = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.ping();
+    }, TRANSPORT_KEEPALIVE_MS);
+    transportKeepAlive.unref();
 
     const resetIdleTimeout = () => {
       Effect.runFork(Fiber.interrupt(idleTimeout));
@@ -291,6 +296,7 @@ export async function startRelayServer(): Promise<RelayServer> {
 
     ws.on("close", (code: number) => {
       process.stderr.write(`[ws] close slug=${slug} code=${code}\n`);
+      clearInterval(transportKeepAlive);
       Effect.runFork(Fiber.interrupt(idleTimeout));
       const remaining = (activeSessionsPerSlug.get(slug) || 1) - 1;
       if (remaining <= 0) activeSessionsPerSlug.delete(slug);
