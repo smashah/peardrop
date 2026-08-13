@@ -58,6 +58,7 @@ const MAX_ACTIVE_SESSIONS_PER_IP = 16;
 const MAX_TICKET_CAP_BYTES = 2 * 1024 * 1024 * 1024;
 const TRANSPORT_KEEPALIVE_MS = 2_000;
 const RESOLVE_TIMEOUT_MS = Number.parseInt(process.env.RELAY_RESOLVE_TIMEOUT_MS ?? "8000", 10);
+const RESOLVE_RETRY_MS = Number.parseInt(process.env.RELAY_RESOLVE_RETRY_MS ?? "250", 10);
 
 const startIdleTimeout = (socket: WebSocket) =>
   Effect.runFork(
@@ -143,29 +144,42 @@ export async function startRelayServer(): Promise<RelayServer> {
   }) as typeof dht.connect;
 
   const canResolvePeer = async (publicKeyHex: string): Promise<boolean> => {
-    const query = dht.findPeer(Buffer.from(publicKeyHex, "hex"), { hash: false, retries: 3 });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        (async () => {
-          for await (const result of query) {
-            if (result.peer) return true;
-          }
-          return false;
-        })(),
-        new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => {
-            query.destroy();
-            resolve(false);
-          }, RESOLVE_TIMEOUT_MS);
-        }),
-      ]);
-    } catch {
-      return false;
-    } finally {
-      if (timer) clearTimeout(timer);
-      query.destroy();
+    const publicKey = Buffer.from(publicKeyHex, "hex");
+    const deadline = Date.now() + RESOLVE_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      const query = dht.findPeer(publicKey, { hash: false, retries: 3 });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const reachable = await Promise.race([
+          (async () => {
+            for await (const result of query) {
+              if (result.peer) return true;
+            }
+            return false;
+          })(),
+          new Promise<boolean>((resolve) => {
+            timer = setTimeout(() => {
+              query.destroy();
+              resolve(false);
+            }, Math.max(0, deadline - Date.now()));
+          }),
+        ]);
+        if (reachable) return true;
+      } catch {
+        // A transient query failure is indistinguishable from an announcement
+        // that has not propagated yet. Retry without ever reporting a false 200.
+      } finally {
+        if (timer) clearTimeout(timer);
+        query.destroy();
+      }
+
+      const retryDelay = Math.min(RESOLVE_RETRY_MS, Math.max(0, deadline - Date.now()));
+      if (retryDelay <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
     }
+
+    return false;
   };
 
   const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {

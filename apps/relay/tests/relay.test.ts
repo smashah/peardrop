@@ -21,6 +21,7 @@ const dhtState = vi.hoisted(() => ({
   connectOutcome: "open" as "open" | "error" | "close" | "pending",
   connectCalls: 0,
   findPeerOutcome: "found" as "found" | "missing" | "pending",
+  findPeerOutcomes: [] as Array<"found" | "missing" | "pending">,
   findPeerCalls: 0,
   instances: [] as Array<{ resolveReady(): void }>,
   readyImmediately: false,
@@ -62,16 +63,17 @@ vi.mock("hyperdht", async () => {
 
       findPeer(): AsyncIterable<{ peer: { publicKey: Buffer } }> & { destroy(): void } {
         dhtState.findPeerCalls += 1;
+        const outcome = dhtState.findPeerOutcomes.shift() ?? dhtState.findPeerOutcome;
         let releasePending: (() => void) | undefined;
         return {
           destroy() {
             releasePending?.();
           },
           async *[Symbol.asyncIterator]() {
-            if (dhtState.findPeerOutcome === "found") {
+            if (outcome === "found") {
               yield { peer: { publicKey: Buffer.alloc(32, 0xab) } };
             }
-            if (dhtState.findPeerOutcome === "pending") {
+            if (outcome === "pending") {
               await new Promise<void>((resolve) => {
                 releasePending = resolve;
               });
@@ -159,9 +161,11 @@ describe("@peardrop/relay runtime contract", () => {
     process.env.RELAY_TICKET_SECRET = ticketSecret;
     process.env.FLY_REGION = "lhr";
     process.env.RELAY_RESOLVE_TIMEOUT_MS = "25";
+    process.env.RELAY_RESOLVE_RETRY_MS = "1";
     dhtState.connectOutcome = "open";
     dhtState.connectCalls = 0;
     dhtState.findPeerOutcome = "found";
+    dhtState.findPeerOutcomes = [];
     dhtState.findPeerCalls = 0;
     dhtState.instances = [];
     dhtState.readyImmediately = false;
@@ -181,6 +185,7 @@ describe("@peardrop/relay runtime contract", () => {
     delete process.env.RELAY_TICKET_SECRET;
     delete process.env.FLY_REGION;
     delete process.env.RELAY_RESOLVE_TIMEOUT_MS;
+    delete process.env.RELAY_RESOLVE_RETRY_MS;
   });
 
   it("exposes /resolve and rejects a missing ticket", async () => {
@@ -248,7 +253,20 @@ describe("@peardrop/relay runtime contract", () => {
     const response = await fetch(`${baseUrl(server)}/resolve?ticket=${signTicket()}`);
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ reachable: false, region: "lhr" });
-    expect(dhtState.findPeerCalls).toBe(1);
+    expect(dhtState.findPeerCalls).toBeGreaterThan(1);
+    expect(dhtState.connectCalls).toBe(0);
+  });
+
+  it("waits for a freshly announced peer before rejecting /resolve", async () => {
+    dhtState.readyImmediately = true;
+    dhtState.findPeerOutcomes = ["missing", "found"];
+    const server = await startServer();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const response = await fetch(`${baseUrl(server)}/resolve?ticket=${signTicket()}`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ reachable: true, region: "lhr" });
+    expect(dhtState.findPeerCalls).toBe(2);
     expect(dhtState.connectCalls).toBe(0);
   });
 
