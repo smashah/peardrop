@@ -13,8 +13,9 @@ declare module "hyperdht" {
   }
 
   interface DHTInstance extends EventEmitter {
+    ready(): Promise<void>;
     createServer(onConnection: (socket: Duplex) => void): Server;
-    connect(remotePublicKey: Buffer): Duplex;
+    connect(remotePublicKey: Buffer, options?: unknown): Duplex;
     destroy(): Promise<void>;
   }
 

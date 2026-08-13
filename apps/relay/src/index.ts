@@ -39,8 +39,7 @@ export interface RelayServer {
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const WORKER_URL = (process.env.WORKER_URL || "https://peardrop.fyi").replace(/\/$/, "");
 // Fly auto-injects both — FLY_ALLOC_ID identifies this specific machine
-// instance, FLY_REGION is the region it's running in (iad/ord). See
-// peardrop#49's diagnostic log lines below.
+// instance, while FLY_REGION identifies its region.
 const MACHINE_ID = `${process.env.FLY_REGION || "?"}:${(process.env.FLY_ALLOC_ID || "local").slice(0, 8)}`;
 
 function requireEnv(name: string): string {
@@ -57,6 +56,7 @@ const usedTickets = new Map<string, number>();
 const MAX_ACTIVE_SESSIONS_PER_SLUG = 4;
 const MAX_ACTIVE_SESSIONS_PER_IP = 16;
 const MAX_TICKET_CAP_BYTES = 2 * 1024 * 1024 * 1024;
+const RESOLVE_TIMEOUT_MS = 8_000;
 
 const startIdleTimeout = (socket: WebSocket) =>
   Effect.runFork(
@@ -110,25 +110,118 @@ const runUsageReport = (program: ReturnType<typeof reportUsageToWorker>): void =
   );
 };
 
-export function startRelayServer(): RelayServer {
+export async function startRelayServer(): Promise<RelayServer> {
   const ticketSecret = requireEnv("RELAY_TICKET_SECRET");
   const dht = new DHT();
 
-  const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
-    if (req.url === "/healthz") {
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("OK");
-      return;
+  let dhtReady = false;
+  dht.ready().then(
+    () => {
+      dhtReady = true;
+      process.stdout.write("[dht] socket bound and bootstrap complete\n");
+    },
+    (error: unknown) => {
+      process.stderr.write(
+        `FATAL: DHT bind/bootstrap failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`
+      );
+      process.exit(1);
     }
-    res.writeHead(404);
-    res.end("Not Found");
+  );
+
+  const dhtConnect = dht.connect.bind(dht);
+  dht.connect = ((remotePublicKey: Buffer, options?: unknown) => {
+    const peerHex = remotePublicKey.toString("hex");
+    process.stderr.write(`[dht.connect] attempting peer=${peerHex}\n`);
+    const stream = dhtConnect(remotePublicKey, options);
+    stream.once("open", () => process.stderr.write(`[dht.connect] OPEN peer=${peerHex}\n`));
+    stream.once("error", (error: Error) =>
+      process.stderr.write(`[dht.connect] ERROR peer=${peerHex} :: ${error.message}\n`)
+    );
+    stream.once("close", () => process.stderr.write(`[dht.connect] CLOSE peer=${peerHex}\n`));
+    return stream;
+  }) as typeof dht.connect;
+
+  const canResolvePeer = (publicKeyHex: string): Promise<boolean> =>
+    new Promise((resolve) => {
+      const stream = dht.connect(Buffer.from(publicKeyHex, "hex"));
+      let settled = false;
+      const finish = (reachable: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        stream.destroy();
+        resolve(reachable);
+      };
+      const timer = setTimeout(() => finish(false), RESOLVE_TIMEOUT_MS);
+      stream.once("open", () => finish(true));
+      stream.once("error", () => finish(false));
+      stream.once("close", () => finish(false));
+    });
+
+  const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+      if (reqUrl.pathname === "/healthz") {
+        res.writeHead(dhtReady ? 200 : 503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: dhtReady, dhtReady }));
+        return;
+      }
+
+      if (reqUrl.pathname === "/resolve") {
+        const requestedRegion = reqUrl.searchParams.get("region");
+        if (requestedRegion && requestedRegion !== process.env.FLY_REGION) {
+          res.writeHead(200, { "fly-replay": `region=${requestedRegion}` });
+          res.end();
+          return;
+        }
+
+        const ticketParam = reqUrl.searchParams.get("ticket");
+        if (!ticketParam) {
+          res.writeHead(401);
+          res.end("Unauthorized");
+          return;
+        }
+
+        let claims: RelayTicketClaims;
+        try {
+          claims = verifyRelayTicketSync(ticketParam, ticketSecret);
+        } catch {
+          res.writeHead(401);
+          res.end("Unauthorized");
+          return;
+        }
+
+        const reachable = dhtReady && await canResolvePeer(claims.publicKey);
+        res.writeHead(reachable ? 200 : 503, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify({ reachable, region: process.env.FLY_REGION ?? "unknown" }));
+        return;
+      }
+
+      res.writeHead(404);
+      res.end("Not Found");
+    })().catch((error: unknown) => {
+      process.stderr.write(
+        `[resolve] failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`
+      );
+      if (!res.headersSent) res.writeHead(500, { "Cache-Control": "no-store" });
+      res.end("Internal Server Error");
+    });
   });
 
   const wss = new WebSocketServer({ noServer: true });
 
   httpServer.on("upgrade", (request: IncomingMessage, socket, head) => {
+    if (!dhtReady) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     const reqUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     const ticketParam = reqUrl.searchParams.get("ticket");
+    const regionParam = reqUrl.searchParams.get("region");
     const remoteAddress = request.socket.remoteAddress ?? "unknown";
     const nowSeconds = Math.floor(Date.now() / 1000);
     for (const [ticket, expiresAt] of usedTickets) {
@@ -151,6 +244,15 @@ export function startRelayServer(): RelayServer {
       return;
     }
 
+    if (regionParam && regionParam !== process.env.FLY_REGION) {
+      process.stderr.write(
+        `[relay] replaying to region=${regionParam} (this machine is ${process.env.FLY_REGION ?? "unknown"})\n`
+      );
+      socket.write(`HTTP/1.1 200 OK\r\nfly-replay: region=${regionParam}\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
+
     const { slug } = claims;
     if (claims.capBytes > MAX_TICKET_CAP_BYTES) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
@@ -166,15 +268,8 @@ export function startRelayServer(): RelayServer {
     }
 
     usedTickets.set(ticketParam, claims.exp);
-    // DIAGNOSTIC (peardrop#49): a real ~25% of connections hang silently
-    // after "relay WS open" with no error and no server-side log trace at
-    // all. This app runs two Fly machines (iad, ord) with zero shared state
-    // (activeSessionsPerSlug/Ip are per-process Maps) — one live hypothesis
-    // is that whichever machine actually accepts a given WS connection
-    // matters. MACHINE_ID (Fly auto-injects FLY_ALLOC_ID) tags every accept
-    // so a real trial batch can show whether hangs correlate with a
-    // particular machine or with mismatched machines across a slug's
-    // sender/receiver connections. Remove once #49 has a diagnosis.
+    // Tag each accepted session with the machine that owns its process-local
+    // replay and rate-limit state so fleet routing problems remain diagnosable.
     process.stdout.write(`[accept] slug=${claims.slug} machine=${MACHINE_ID}\n`);
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit("connection", ws, request, claims, remoteAddress);
@@ -210,7 +305,12 @@ export function startRelayServer(): RelayServer {
     const socketStream = new Stream(false, meteredSocket);
     relay(dht, socketStream);
 
-    ws.on("close", () => {
+    ws.on("error", (error: Error) => {
+      process.stderr.write(`[ws] error slug=${slug} :: ${error.message}\n`);
+    });
+
+    ws.on("close", (code: number) => {
+      process.stderr.write(`[ws] close slug=${slug} code=${code}\n`);
       Effect.runFork(Fiber.interrupt(idleTimeout));
       const remaining = (activeSessionsPerSlug.get(slug) || 1) - 1;
       if (remaining <= 0) activeSessionsPerSlug.delete(slug);
@@ -223,13 +323,23 @@ export function startRelayServer(): RelayServer {
     });
   });
 
-  httpServer.listen(PORT, () => {
-    process.stdout.write(`PearDrop Relay server listening on port ${PORT}\n`);
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(PORT, () => {
+      httpServer.removeListener("error", reject);
+      process.stdout.write(`PearDrop Relay server listening on port ${PORT}\n`);
+      resolve();
+    });
   });
 
   return { httpServer, wss, dht };
 }
 
 if (process.env.NODE_ENV !== "test") {
-  startRelayServer();
+  startRelayServer().catch((error: unknown) => {
+    process.stderr.write(
+      `FATAL: relay failed to start: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`
+    );
+    process.exit(1);
+  });
 }
