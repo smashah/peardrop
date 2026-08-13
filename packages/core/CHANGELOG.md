@@ -13,6 +13,13 @@
 
 
 
+
+## 1.5.7
+<sub>2026-08-13</sub>
+
+- [#67](https://github.com/smashah/peardrop/pull/67) [`223e777`](https://github.com/smashah/peardrop/commit/223e77758d028ba8db94f5234b4e76888c75601e)  *(patch)*
+  Fail relay transfers immediately when an opened relay WebSocket closes instead of waiting for the phase timeout, and accept `test nc --verbose` for detailed production diagnostics.
+
 ## 1.5.6
 <sub>2026-08-13</sub>
 
