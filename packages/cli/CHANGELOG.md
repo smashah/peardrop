@@ -24,8 +24,8 @@
 ## 1.5.13
 <sub>2026-08-13</sub>
 
-- [#79](https://github.com/smashah/peardrop/pull/79) [`bae9d8f`](https://github.com/smashah/peardrop/commit/bae9d8f7e661000b67665b79427bb72462a53635)  *(patch)*
-  Fall back immediately when the preferred browser relay transport closes before the receiver accepts the manifest, after fully tearing down the failed attempt.
+- [#79](https://github.com/smashah/peardrop/pull/79) [`bd2a6ca`](https://github.com/smashah/peardrop/commit/bd2a6cab4f11e7b8c8ee98f0cd43260ad623e4fc)  *(patch)*
+  Fall back promptly when the preferred browser relay connection fails before receiver acceptance during hashing, HELLO, MANIFEST, or ACCEPT. Interrupted hashing now cancels and releases its stream reader, and every failed attempt fully tears down before fallback starts.
 
 ## 1.5.12
 <sub>2026-08-13</sub>
