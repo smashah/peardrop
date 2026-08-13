@@ -1,0 +1,50 @@
+diff --git a/crypto_sign.js b/crypto_sign.js
+index 5278c5d..dcd656a 100644
+--- a/crypto_sign.js
++++ b/crypto_sign.js
+@@ -2,2 +2,3 @@
+ const { crypto_verify_32 } = require('./crypto_verify')
++const { ed25519 } = require('@noble/curves/ed25519')
+ const { crypto_hash } = require('./crypto_hash')
+@@ -18,1 +19,2 @@
+ const crypto_sign_ed25519_BYTES = 64
++const crypto_scalarmult_ed25519_BYTES = 32
+@@ -26,2 +28,4 @@ module.exports = {
+   crypto_sign_keypair,
+   crypto_sign_seed_keypair,
++  crypto_scalarmult_ed25519_noclamp,
++  crypto_scalarmult_ed25519_BYTES,
+@@ -47,1 +51,33 @@ module.exports = {
++const ED25519_SCALAR_MASK = (1n << 255n) - 1n
++
++// Match libsodium's checked no-clamp primitive. Noble supplies strict point
++// decoding and subgroup tests; libsodium ignores the scalar's top bit before
++// multiplying, and group multiplication reduces the remaining value mod L.
++function crypto_scalarmult_ed25519_noclamp (output, scalar, publicKey) {
++  check(output, crypto_scalarmult_ed25519_BYTES)
++  check(scalar, crypto_scalarmult_ed25519_BYTES)
++  check(publicKey, crypto_scalarmult_ed25519_BYTES)
++
++  const point = ed25519.ExtendedPoint.fromHex(publicKey, false)
++  if (point.isSmallOrder() || !point.isTorsionFree()) {
++    throw new Error('Invalid Ed25519 public key')
++  }
++
++  const scalarValue = readScalarLittleEndian(scalar) & ED25519_SCALAR_MASK
++  const reducedScalar = scalarValue % ed25519.CURVE.n
++  if (reducedScalar === 0n) throw new Error('Invalid Ed25519 scalar')
++
++  const result = point.multiplyUnsafe(reducedScalar)
++  if (result.is0()) throw new Error('Invalid Ed25519 shared secret')
++  output.set(result.toRawBytes())
++}
++
++function readScalarLittleEndian (scalar) {
++  let value = 0n
++  for (let index = scalar.length - 1; index >= 0; index--) {
++    value = (value << 8n) | BigInt(scalar[index])
++  }
++  return value
++}
++
+ function set25519 (r, a) {
