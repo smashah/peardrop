@@ -57,6 +57,7 @@ const MAX_ACTIVE_SESSIONS_PER_SLUG = 4;
 const MAX_ACTIVE_SESSIONS_PER_IP = 16;
 const MAX_TICKET_CAP_BYTES = 2 * 1024 * 1024 * 1024;
 const TRANSPORT_KEEPALIVE_MS = 2_000;
+const RESOLVE_TIMEOUT_MS = Number.parseInt(process.env.RELAY_RESOLVE_TIMEOUT_MS ?? "8000", 10);
 
 const startIdleTimeout = (socket: WebSocket) =>
   Effect.runFork(
@@ -141,6 +142,32 @@ export async function startRelayServer(): Promise<RelayServer> {
     return stream;
   }) as typeof dht.connect;
 
+  const canResolvePeer = async (publicKeyHex: string): Promise<boolean> => {
+    const query = dht.findPeer(Buffer.from(publicKeyHex, "hex"), { hash: false, retries: 3 });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        (async () => {
+          for await (const result of query) {
+            if (result.peer) return true;
+          }
+          return false;
+        })(),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => {
+            query.destroy();
+            resolve(false);
+          }, RESOLVE_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
+      query.destroy();
+    }
+  };
+
   const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -158,8 +185,9 @@ export async function startRelayServer(): Promise<RelayServer> {
           return;
         }
 
+        let claims: RelayTicketClaims;
         try {
-          verifyRelayTicketSync(ticketParam, ticketSecret);
+          claims = verifyRelayTicketSync(ticketParam, ticketSecret);
         } catch {
           res.writeHead(401);
           res.end("Unauthorized");
@@ -173,11 +201,15 @@ export async function startRelayServer(): Promise<RelayServer> {
           return;
         }
 
-        res.writeHead(dhtReady ? 200 : 503, {
+        const reachable = dhtReady && await canResolvePeer(claims.publicKey);
+        process.stdout.write(
+          `[resolve] peer=${claims.publicKey} region=${process.env.FLY_REGION ?? "unknown"} reachable=${String(reachable)}\n`
+        );
+        res.writeHead(reachable ? 200 : 503, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
         });
-        res.end(JSON.stringify({ reachable: dhtReady, region: process.env.FLY_REGION ?? "unknown" }));
+        res.end(JSON.stringify({ reachable, region: process.env.FLY_REGION ?? "unknown" }));
         return;
       }
 

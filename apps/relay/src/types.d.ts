@@ -16,6 +16,10 @@ declare module "hyperdht" {
     ready(): Promise<void>;
     createServer(onConnection: (socket: Duplex) => void): Server;
     connect(remotePublicKey: Buffer, options?: unknown): Duplex;
+    findPeer(
+      publicKey: Buffer,
+      options?: { readonly hash?: boolean; readonly retries?: number }
+    ): AsyncIterable<{ readonly peer?: { readonly publicKey: Buffer } }> & { destroy(): void };
     destroy(): Promise<void>;
   }
 
