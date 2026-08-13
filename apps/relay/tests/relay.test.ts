@@ -23,6 +23,7 @@ const dhtState = vi.hoisted(() => ({
   findPeerOutcome: "found" as "found" | "missing" | "pending",
   findPeerOutcomes: [] as Array<"found" | "missing" | "pending">,
   findPeerCalls: 0,
+  findPeerOptions: [] as Array<{ hash?: boolean; retries?: number }>,
   instances: [] as Array<{ resolveReady(): void }>,
   readyImmediately: false,
 }));
@@ -61,8 +62,12 @@ vi.mock("hyperdht", async () => {
         return stream;
       }
 
-      findPeer(): AsyncIterable<{ peer: { publicKey: Buffer } }> & { destroy(): void } {
+      findPeer(
+        _publicKey: Buffer,
+        options: { hash?: boolean; retries?: number }
+      ): AsyncIterable<{ peer: { publicKey: Buffer } }> & { destroy(): void } {
         dhtState.findPeerCalls += 1;
+        dhtState.findPeerOptions.push(options);
         const outcome = dhtState.findPeerOutcomes.shift() ?? dhtState.findPeerOutcome;
         let releasePending: (() => void) | undefined;
         return {
@@ -167,6 +172,7 @@ describe("@peardrop/relay runtime contract", () => {
     dhtState.findPeerOutcome = "found";
     dhtState.findPeerOutcomes = [];
     dhtState.findPeerCalls = 0;
+    dhtState.findPeerOptions = [];
     dhtState.instances = [];
     dhtState.readyImmediately = false;
   });
@@ -231,6 +237,7 @@ describe("@peardrop/relay runtime contract", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ reachable: true, region: "lhr" });
     expect(dhtState.findPeerCalls).toBe(1);
+    expect(dhtState.findPeerOptions).toEqual([{ retries: 3 }]);
     expect(dhtState.connectCalls).toBe(0);
   });
 
