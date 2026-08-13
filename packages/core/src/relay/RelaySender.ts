@@ -30,6 +30,10 @@ enum FrameType {
 
 export type RelayMode = "non-custodial" | "custodial-fallback";
 export type RelayFallback = "custodial" | "none";
+export type RelayFallbackReason =
+  | "accept-timeout"
+  | "dht-connect-failed"
+  | "pre-accept-connection-failed";
 export type RelayPhase =
   | "ticket-request"
   | "socket-open"
@@ -58,7 +62,7 @@ export interface RelayLifecycleEvent {
   readonly totalBytes?: number;
   readonly waitedMs?: number;
   readonly timeoutMs?: number;
-  readonly reason?: string;
+  readonly reason?: RelayFallbackReason;
   readonly error?: string;
 }
 
@@ -267,12 +271,12 @@ const runPhase = <A>(
   return yield* exit;
 });
 
-const attemptTransfer = (
+const attemptTransferScoped = (
   request: RelaySendRequest,
   adapters: RelaySenderAdapters,
   context: AttemptContext,
   custodial: boolean
-) => Effect.scoped(Effect.gen(function* () {
+) => Effect.gen(function* () {
   const failure = (phase: RelayPhase, message: string, connectionFailure = true) =>
     new RelaySenderError({ message, phase, attempt: context.attempt, mode: context.mode, connectionFailure });
   const timeoutMs = request.acceptTimeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -347,30 +351,53 @@ const attemptTransfer = (
   const peer = dht.connect(hexToBytes(request.descriptor.publicKey));
   const peerEvents = peer as typeof peer & {
     on(event: "error", listener: (error: unknown) => void): void;
+    on(event: "close", listener: () => void): void;
     removeListener(event: "error", listener: (error: unknown) => void): void;
+    removeListener(event: "close", listener: () => void): void;
   };
   const accepted = yield* Deferred.make<true, RelaySenderError>();
   const done = yield* Deferred.make<RelaySendResult["files"], RelaySenderError>();
+  const peerConnectionFailed = yield* Deferred.make<never, RelaySenderError>();
+  let dhtConnected = false;
+  let receiverAccepted = false;
   const failReceiver = (message: string, phase: RelayPhase, connectionFailure = true) =>
     Deferred.fail(accepted, failure(phase, message, connectionFailure)).pipe(
       Effect.andThen(Deferred.fail(done, failure(phase, message, connectionFailure)))
     );
-  const onError = (cause: unknown) => {
-    Effect.runFork(failReceiver(cause instanceof Error ? cause.message : "Relay connection failed", "done"));
+  const failPeerConnection = (message: string) => {
+    const phase: RelayPhase = !dhtConnected ? "dht-connect" : receiverAccepted ? "done" : "accept";
+    const error = failure(phase, message);
+    Effect.runFork(Deferred.fail(peerConnectionFailed, error).pipe(
+      Effect.andThen(Deferred.fail(accepted, error)),
+      Effect.andThen(Deferred.fail(done, error))
+    ));
   };
-  peerEvents.on("error", onError);
+  const onPeerError = (cause: unknown) => {
+    failPeerConnection(cause instanceof Error ? cause.message : "Relay peer connection failed");
+  };
+  const onPeerClose = () => {
+    failPeerConnection("Relay peer connection closed during transfer");
+  };
+  peerEvents.on("error", onPeerError);
+  peerEvents.on("close", onPeerClose);
   yield* Effect.addFinalizer(() => Effect.sync(() => peer.destroy()));
-  yield* Effect.addFinalizer(() => Effect.sync(() => peerEvents.removeListener("error", onError)));
+  yield* Effect.addFinalizer(() => Effect.sync(() => {
+    peerEvents.removeListener("error", onPeerError);
+    peerEvents.removeListener("close", onPeerClose);
+  }));
+  const guardPeerConnection = <A>(effect: Effect.Effect<A, RelaySenderError>) =>
+    Effect.raceFirst(effect, Deferred.await(peerConnectionFailed));
   yield* runPhase(context, "dht-connect", withTimeout(
-    guardTransport("dht-connect", Effect.tryPromise({
+    guardTransport("dht-connect", guardPeerConnection(Effect.tryPromise({
       try: () => peer.opened,
       catch: (cause) => failure("dht-connect", cause instanceof Error ? cause.message : "Relay DHT connection failed"),
     }).pipe(Effect.flatMap((opened) => opened
       ? Effect.void
-      : Effect.fail(failure("dht-connect", "Relay DHT connection closed before opening"))))),
+      : Effect.fail(failure("dht-connect", "Relay DHT connection closed before opening")))))),
     timeoutMs,
     failure("dht-connect", "Relay DHT connection timed out")
   ));
+  dhtConnected = true;
 
   let received: Uint8Array<ArrayBufferLike> = new Uint8Array();
   const processIncoming = (chunk: Uint8Array) => Effect.gen(function* () {
@@ -389,7 +416,10 @@ const attemptTransfer = (
       const type = received[4];
       const payload = received.slice(5, length + 4);
       received = received.slice(length + 4);
-      if (type === FrameType.ACCEPT) yield* Deferred.succeed(accepted, true);
+      if (type === FrameType.ACCEPT) {
+        receiverAccepted = true;
+        yield* Deferred.succeed(accepted, true);
+      }
       if (type === FrameType.DONE) {
         const json = yield* Effect.try({
           try: () => JSON.parse(decoder.decode(payload)) as unknown,
@@ -422,18 +452,11 @@ const attemptTransfer = (
   };
   peer.on("data", onData);
   yield* Effect.addFinalizer(() => Effect.gen(function* () {
-    const teardownStartedAt = context.now();
-    yield* report(context, { phase: "teardown", status: "start" });
     yield* Effect.forEach(incomingFibers, Fiber.interrupt, { discard: true });
     peer.removeListener("data", onData);
-    yield* report(context, {
-      phase: "teardown",
-      status: "complete",
-      durationMs: Math.max(0, Math.round(context.now() - teardownStartedAt)),
-    });
   }));
   const boundedWrite = (data: Uint8Array, error: RelaySenderError) =>
-    withTimeout(guardTransport(error.phase, write(peer, data, error)), timeoutMs, error);
+    withTimeout(guardTransport(error.phase, guardPeerConnection(write(peer, data, error))), timeoutMs, error);
 
   const manifests = yield* Effect.forEach(request.files, (file, fileIndex) => runPhase(
     context,
@@ -456,7 +479,7 @@ const attemptTransfer = (
     failure("manifest", "Could not write PDWP MANIFEST")
   ));
 
-  yield* runPhase(context, "accept", guardTransport("accept", Effect.gen(function* () {
+  yield* runPhase(context, "accept", guardTransport("accept", guardPeerConnection(Effect.gen(function* () {
     const acceptStartedAt = context.now();
     let waitedMs = 0;
     yield* report(context, { phase: "accept", status: "progress", waitedMs, timeoutMs });
@@ -471,7 +494,7 @@ const attemptTransfer = (
       yield* report(context, { phase: "accept", status: "progress", waitedMs, timeoutMs });
     }
     return yield* Effect.fail(failure("accept", ACCEPT_TIMEOUT_MESSAGE));
-  })));
+  }))));
 
   for (const [fileIndex, file] of request.files.entries()) {
     const reader = file.stream().getReader();
@@ -512,12 +535,34 @@ const attemptTransfer = (
   }
 
   const delivered = yield* runPhase(context, "done", withTimeout(
-    guardTransport("done", Deferred.await(done)),
+    guardTransport("done", guardPeerConnection(Deferred.await(done))),
     timeoutMs,
     failure("done", "Receiver did not confirm delivery in time")
   ));
   return { files: delivered, mode: context.mode };
-}));
+});
+
+const attemptTransfer = (
+  request: RelaySendRequest,
+  adapters: RelaySenderAdapters,
+  context: AttemptContext,
+  custodial: boolean
+) => Effect.gen(function* () {
+  let teardownStartedAt = context.now();
+  const attempt = Effect.scoped(attemptTransferScoped(request, adapters, context, custodial).pipe(
+    Effect.ensuring(Effect.suspend(() => {
+      teardownStartedAt = context.now();
+      return report(context, { phase: "teardown", status: "start" });
+    }))
+  ));
+  const exit = yield* Effect.exit(attempt);
+  yield* report(context, {
+    phase: "teardown",
+    status: "complete",
+    durationMs: Math.max(0, Math.round(context.now() - teardownStartedAt)),
+  });
+  return yield* exit;
+});
 
 export const sendRelay = (request: RelaySendRequest, adapters: RelaySenderAdapters) =>
   Effect.gen(function* () {
