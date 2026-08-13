@@ -34,7 +34,7 @@ const forbiddenText = [
   "owner" + "Auth",
   "smash" + "stack",
 ];
-const ignoredGeneratedPaths = new Set([".artifacts", ".git", ".turbo", "node_modules"]);
+const ignoredGeneratedPaths = new Set([".agent", ".artifacts", ".git", ".turbo", "node_modules"]);
 const violations = [];
 
 const scan = async (directory) => {

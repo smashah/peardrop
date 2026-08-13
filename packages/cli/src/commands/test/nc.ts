@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { NcDiagnosticError, parseBoundedTimeout, runNcDiagnostic } from "../../diagnostics/nc.js";
 
 export default class TestNcCommand extends Command {
-  static override description = "Run a disposable production non-custodial Relay diagnostic";
+  static override description = "Run a disposable production non-custodial Relay diagnostic against the shared web-sender boundary";
 
   static override flags = {
     timeout: Flags.string({ description: "Bounded diagnostic timeout (5s to 2m)", default: "30s" }),

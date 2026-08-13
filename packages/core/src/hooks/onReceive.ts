@@ -8,6 +8,25 @@ export const ON_RECEIVE_FILE_PATHS_ENV = "PEARDROP_FILE_PATHS";
 /** Number of files this drop delivered. */
 export const ON_RECEIVE_FILE_COUNT_ENV = "PEARDROP_FILE_COUNT";
 
+/**
+ * Env vars (highest precedence first) consulted when a caller needs the Bun
+ * interpreter explicitly — e.g. to invoke a `.ts` hook directly. Resolution
+ * NEVER falls back to a hardcoded absolute path (a Homebrew or user-local Bun
+ * path is wrong across machines and containers); the bare name is returned so
+ * the shell's own `$PATH` lookup handles platform differences the same way
+ * {@link runOnReceiveHook}'s `shell: true` already does for arbitrary
+ * operator commands.
+ */
+export const PEARDROP_BUN_ENV = ["PEARDROP_BUN", "BUN"];
+
+export function resolveBunFromEnv(env: NodeJS.ProcessEnv = process.env): string {
+  for (const name of PEARDROP_BUN_ENV) {
+    const value = env[name];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return "bun";
+}
+
 export interface OnReceiveHookFile {
   readonly name: string;
   readonly path?: string;

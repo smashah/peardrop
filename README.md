@@ -43,7 +43,7 @@ npx --yes @peardrop/cli@latest test nc
 
 Normal CLI sends use direct HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path. Add `--relay` to `send` when you need to force the same WebSocket-to-HyperDHT Relay transport used by the hosted sender; it tries non-custodial Relay first and falls back to custodial forwarding only when required. Pass `--no-relay` to `receive` when you explicitly want a direct-only session.
 
-`test nc` runs a disposable, non-custodial-only production Relay transfer without a browser. It verifies the received bytes and hash, receiver shutdown, and tunnel consumption, then removes its temporary payload and inbox. Use `--json` for structured lifecycle output or `--timeout 1m` to override the bounded 30-second default.
+`test nc` runs a disposable, non-custodial-only production Relay transfer without a browser. It invokes the exact shared web-sender boundary (`sendRelay`) that the hosted browser sender and `send --relay` use — not a CLI subprocess approximation. It verifies the received bytes and hash, receiver shutdown, tunnel consumption, and **terminal consistency**: after any failure, timeout, or signal, it awaits bounded sender teardown and watches the receiver for a 2-second window so no invisible live attempt can deliver after the terminal result. Use `--json` for structured lifecycle output labeled `receiver`/`web-sender`/`relay`/`harness`, or `--timeout 1m` to override the bounded 30-second default.
 
 ## Relay
 
