@@ -18,6 +18,13 @@
 
 
 
+
+## 1.5.12
+<sub>2026-08-13</sub>
+
+- [#77](https://github.com/smashah/peardrop/pull/77) [`e1cf589`](https://github.com/smashah/peardrop/commit/e1cf58986bb023476e4e62839c866e3d0eb2e81a)  *(patch)*
+  Restore browser relay Noise handshakes by shipping the Ed25519 scalar-multiplication compatibility required by the bundled non-custodial DHT client.
+
 ## 1.5.11
 <sub>2026-08-13</sub>
 
