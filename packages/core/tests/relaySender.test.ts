@@ -5,9 +5,11 @@ import * as Effect from "effect/Effect";
 const writes: Array<{ attempt: number; frame: Uint8Array }> = [];
 const custodialModes: boolean[] = [];
 const peers: EventEmitter[] = [];
+const sockets: MockWebSocket[] = [];
 const resourceEvents: string[] = [];
 let rejectNonCustodial = false;
 let closeDuringBackpressureType: number | undefined;
+let closeSocketDuringWriteType: number | undefined;
 let dhtDestroyCount = 0;
 let webSocketCloseCount = 0;
 let streamCancelCount = 0;
@@ -53,6 +55,10 @@ vi.mock("@hyperswarm/dht-relay", () => ({
       peer.write = (frame) => {
         writes.push({ attempt, frame });
         const type = frame[4];
+        if (attempt === 1 && closeSocketDuringWriteType === type) {
+          queueMicrotask(() => sockets[0]!.closeFromRelay());
+          return false;
+        }
         if (closeDuringBackpressureType === type) {
           queueMicrotask(() => peer.emit("close"));
           return false;
@@ -109,6 +115,7 @@ class MockWebSocket extends EventTarget {
   constructor() {
     super();
     this.attempt = ++socketAttempt;
+    sockets.push(this);
     queueMicrotask(() => {
       this.dispatchEvent(new Event("open"));
       if (closeWebSocketAfterOpen) {
@@ -117,6 +124,9 @@ class MockWebSocket extends EventTarget {
     });
   }
   send() {}
+  closeFromRelay() {
+    this.dispatchEvent(Object.assign(new Event("close"), { code: 1005, reason: "" }));
+  }
   override removeEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) {
     if (type === "close") resourceEvents.push(`socket-listener-remove:${this.attempt}:close`);
     super.removeEventListener(type, listener, options);
@@ -177,8 +187,11 @@ const expectFirstAttemptTornDownBeforeFallback = () => {
     "socket-close:1",
   ]) {
     expect(resourceEvents).toContain(completedDuringTeardown);
-    expect(resourceEvents.indexOf(completedDuringTeardown)).toBeGreaterThan(teardownStart);
-    expect(resourceEvents.indexOf(completedDuringTeardown)).toBeLessThan(teardownComplete);
+    const duringTeardown = resourceEvents.findIndex((event, index) =>
+      index > teardownStart && event === completedDuringTeardown
+    );
+    expect(duringTeardown).toBeGreaterThan(teardownStart);
+    expect(duringTeardown).toBeLessThan(teardownComplete);
   }
 };
 
@@ -186,9 +199,11 @@ beforeEach(() => {
   writes.length = 0;
   custodialModes.length = 0;
   peers.length = 0;
+  sockets.length = 0;
   resourceEvents.length = 0;
   rejectNonCustodial = false;
   closeDuringBackpressureType = undefined;
+  closeSocketDuringWriteType = undefined;
   dhtDestroyCount = 0;
   webSocketCloseCount = 0;
   streamCancelCount = 0;
@@ -316,22 +331,35 @@ describe("shared Relay sender", () => {
     }));
   });
 
-  it("interrupts hashing and falls back when the preferred peer closes", async () => {
+  it("interrupts hashing and falls back when the preferred socket closes", async () => {
     let firstHashStarted!: () => void;
     const hashingStarted = new Promise<void>((resolve) => {
       firstHashStarted = resolve;
     });
     let hashingStreamAttempt = 0;
+    let hashReaderCancelled = false;
+    let hashReaderReleased = false;
     const gatedHashFile = {
       ...file,
       stream: () => {
         hashingStreamAttempt += 1;
         if (hashingStreamAttempt !== 1) return file.stream();
-        return new ReadableStream<Uint8Array>({
-          start() {
-            firstHashStarted();
-          },
-        });
+        return {
+          getReader: () => ({
+            read: () => {
+              firstHashStarted();
+              return new Promise<ReadableStreamReadResult<Uint8Array>>(() => undefined);
+            },
+            cancel: async () => {
+              hashReaderCancelled = true;
+              resourceEvents.push("hash-reader-cancel:1");
+            },
+            releaseLock: () => {
+              hashReaderReleased = true;
+              resourceEvents.push("hash-reader-release:1");
+            },
+          }),
+        } as unknown as ReadableStream<Uint8Array>;
       },
     };
     const events: Array<{ phase: string; status: string; reason?: string; attempt: number }> = [];
@@ -346,7 +374,7 @@ describe("shared Relay sender", () => {
     }, adapters)));
 
     await hashingStarted;
-    peers[0]!.emit("close");
+    sockets[0]!.closeFromRelay();
     const result = await send;
 
     expect(result.mode).toBe("custodial-fallback");
@@ -366,6 +394,37 @@ describe("shared Relay sender", () => {
       status: "complete",
     }));
     expect(writes.filter(({ attempt }) => attempt === 1)).toHaveLength(0);
+    expect(hashReaderCancelled).toBe(true);
+    expect(hashReaderReleased).toBe(true);
+    expectFirstAttemptTornDownBeforeFallback();
+    expect(resourceEvents.indexOf("hash-reader-cancel:1")).toBeLessThan(resourceEvents.indexOf("ticket:2"));
+    expect(resourceEvents.indexOf("hash-reader-release:1")).toBeLessThan(resourceEvents.indexOf("ticket:2"));
+  });
+
+  it.each([
+    [1, "HELLO"],
+    [2, "MANIFEST"],
+  ] as const)("falls back when the preferred socket closes during %s (%s)", async (frameType) => {
+    closeSocketDuringWriteType = frameType;
+    const events: Array<{ phase: string; reason?: string; attempt: number }> = [];
+
+    const result = await Effect.runPromise(Effect.scoped(sendRelay({
+      descriptor,
+      files: [file],
+      acceptTimeoutMs: 1_000,
+      onEvent: (event) => {
+        events.push(event);
+        if (event.phase === "teardown") resourceEvents.push(`teardown-${event.status}:${event.attempt}`);
+      },
+    }, adapters)));
+
+    expect(result.mode).toBe("custodial-fallback");
+    expect(result.files).toEqual(deliveredFiles);
+    expect(events).toContainEqual(expect.objectContaining({
+      phase: "fallback",
+      reason: "pre-accept-connection-failed",
+    }));
+    expect(writes.filter(({ attempt, frame }) => attempt === 1 && frame[4] === 4)).toHaveLength(0);
     expectFirstAttemptTornDownBeforeFallback();
   });
 

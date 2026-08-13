@@ -72,6 +72,7 @@ export class RelaySenderError extends Data.TaggedError("RelaySenderError")<{
   readonly attempt: number;
   readonly mode: RelayMode;
   readonly connectionFailure?: boolean;
+  readonly beforeReceiverAccept?: boolean;
 }> {}
 
 export const isRelayConnectionFailure = (error: unknown): boolean =>
@@ -217,22 +218,41 @@ const withTimeout = <A, E>(effect: Effect.Effect<A, E>, durationMs: number, erro
     orElse: () => Effect.fail(error),
   });
 
-const hashFile = (file: RelayFile, error: RelaySenderError) => Effect.tryPromise({
-  try: async () => {
+const hashFile = (file: RelayFile, error: RelaySenderError) => Effect.suspend(() => {
     const digest = sha256.create();
     const reader = file.stream().getReader();
-    try {
+    let completed = false;
+    const read = Effect.callback<ReadableStreamReadResult<Uint8Array>, RelaySenderError>((resume) => {
+      let active = true;
+      void reader.read().then(
+        (result) => {
+          if (active) resume(Effect.succeed(result));
+        },
+        () => {
+          if (active) resume(Effect.fail(error));
+        }
+      );
+      return Effect.sync(() => {
+        active = false;
+      });
+    });
+    return Effect.gen(function* () {
       while (true) {
-        const next = await reader.read();
+        const next = yield* read;
         if (next.done) break;
         digest.update(next.value);
       }
-    } finally {
-      reader.releaseLock();
-    }
-    return Array.from(digest.digest(), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  },
-  catch: () => error,
+      completed = true;
+      return Array.from(digest.digest(), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    }).pipe(Effect.ensuring(Effect.gen(function* () {
+      if (!completed) {
+        yield* Effect.tryPromise({
+          try: () => reader.cancel("Relay hashing stopped before the input stream completed"),
+          catch: () => undefined,
+        }).pipe(Effect.ignore);
+      }
+      yield* Effect.sync(() => reader.releaseLock());
+    })));
 });
 
 type AttemptContext = {
@@ -277,8 +297,16 @@ const attemptTransferScoped = (
   context: AttemptContext,
   custodial: boolean
 ) => Effect.gen(function* () {
+  let receiverAccepted = false;
   const failure = (phase: RelayPhase, message: string, connectionFailure = true) =>
-    new RelaySenderError({ message, phase, attempt: context.attempt, mode: context.mode, connectionFailure });
+    new RelaySenderError({
+      message,
+      phase,
+      attempt: context.attempt,
+      mode: context.mode,
+      connectionFailure,
+      beforeReceiverAccept: !receiverAccepted,
+    });
   const timeoutMs = request.acceptTimeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollMs = request.acceptPollMs ?? DEFAULT_ACCEPT_POLL_MS;
 
@@ -359,7 +387,6 @@ const attemptTransferScoped = (
   const done = yield* Deferred.make<RelaySendResult["files"], RelaySenderError>();
   const peerConnectionFailed = yield* Deferred.make<never, RelaySenderError>();
   let dhtConnected = false;
-  let receiverAccepted = false;
   const failReceiver = (message: string, phase: RelayPhase, connectionFailure = true) =>
     Deferred.fail(accepted, failure(phase, message, connectionFailure)).pipe(
       Effect.andThen(Deferred.fail(done, failure(phase, message, connectionFailure)))
@@ -593,14 +620,16 @@ export const sendRelay = (request: RelaySendRequest, adapters: RelaySenderAdapte
     if (Exit.isSuccess(first)) return first.value;
     const found = Exit.findError(first);
     if (found._tag !== "Success" || request.fallback === "none") return yield* first;
-    const fallbackReason = found.success.phase === "accept"
-      ? found.success.message === ACCEPT_TIMEOUT_MESSAGE
-        ? "accept-timeout"
-        : found.success.connectionFailure === true
-          ? "pre-accept-connection-failed"
-          : undefined
-      : found.success.phase === "dht-connect" && found.success.connectionFailure === true
-        ? "dht-connect-failed"
+    const fallbackReason: RelayFallbackReason | undefined = found.success.phase === "accept"
+      && found.success.message === ACCEPT_TIMEOUT_MESSAGE
+      ? "accept-timeout"
+      : found.success.connectionFailure === true
+        && found.success.beforeReceiverAccept === true
+        && found.success.phase !== "ticket-request"
+        && found.success.phase !== "socket-open"
+        ? found.success.phase === "dht-connect"
+          ? "dht-connect-failed"
+          : "pre-accept-connection-failed"
         : undefined;
     if (!fallbackReason) return yield* first;
     yield* report(firstContext, { phase: "fallback", status: "complete", reason: fallbackReason });
