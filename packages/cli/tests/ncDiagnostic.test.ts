@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,9 +15,23 @@ import { RelaySenderError, type RelayLifecycleEvent } from "@peardrop/core/relay
 
 const temporaryPaths: string[] = [];
 const PAYLOAD_FILE = join(tmpdir(), "peardrop-nc-receiver-payload");
+const PAYLOAD_PENDING_FILE = `${PAYLOAD_FILE}.pending`;
 const CANCELLED_FILE = join(tmpdir(), "peardrop-nc-receiver-cancelled");
 
 const exists = async (path: string) => stat(path).then(() => true, () => false);
+
+interface FixturePayloadPublisher {
+  readonly writePending?: (path: string, payload: string) => Promise<void>;
+  readonly publish?: (pendingPath: string, watchedPath: string) => Promise<void>;
+}
+
+const publishFixturePayload = async (
+  payload: string,
+  publisher: FixturePayloadPublisher = {}
+): Promise<void> => {
+  await (publisher.writePending ?? writeFile)(PAYLOAD_PENDING_FILE, payload);
+  await (publisher.publish ?? rename)(PAYLOAD_PENDING_FILE, PAYLOAD_FILE);
+};
 
 const startWorkerDouble = async (descriptorPublicKey = "a".repeat(64)) => {
   const requests: Array<{ method: string; url: string; authorization?: string }> = [];
@@ -77,7 +91,10 @@ const stagePayload = async (invocation: WebSenderInvocation): Promise<string> =>
     }
   }
   const payload = new TextDecoder().decode(Buffer.concat(chunks));
-  await writeFile(PAYLOAD_FILE, payload);
+  // Publish only after the complete payload is flushed. Writing the watched
+  // path directly exposes the truncate-before-write window, allowing the
+  // receiver fixture to consume an empty file and exit successfully.
+  await publishFixturePayload(payload);
   return payload;
 };
 
@@ -191,10 +208,43 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
   await rm(PAYLOAD_FILE, { force: true });
+  await rm(PAYLOAD_PENDING_FILE, { force: true });
   await rm(CANCELLED_FILE, { force: true });
 });
 
 describe("test nc diagnostic safety", () => {
+  it("publishes only a complete fixture payload at the watched path", async () => {
+    const payload = "x".repeat(59);
+    let pendingWritten!: () => void;
+    const pendingReady = new Promise<void>((resolve) => {
+      pendingWritten = resolve;
+    });
+    let releasePublish!: () => void;
+    const publishGate = new Promise<void>((resolve) => {
+      releasePublish = resolve;
+    });
+
+    const publication = publishFixturePayload(payload, {
+      writePending: async (path, value) => {
+        await writeFile(path, value);
+        pendingWritten();
+      },
+      publish: async (pendingPath, watchedPath) => {
+        await publishGate;
+        await rename(pendingPath, watchedPath);
+      },
+    });
+
+    await pendingReady;
+    expect(await exists(PAYLOAD_FILE)).toBe(false);
+    expect(await readFile(PAYLOAD_PENDING_FILE, "utf8")).toBe(payload);
+
+    releasePublish();
+    await publication;
+    expect(await readFile(PAYLOAD_FILE)).toHaveLength(59);
+    expect(await readFile(PAYLOAD_FILE, "utf8")).toBe(payload);
+  });
+
   it("redacts session authority and relay admission material recursively", () => {
     expect(redactDiagnosticValue({
       tunnelId: "safe-slug",
