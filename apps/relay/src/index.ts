@@ -56,7 +56,6 @@ const usedTickets = new Map<string, number>();
 const MAX_ACTIVE_SESSIONS_PER_SLUG = 4;
 const MAX_ACTIVE_SESSIONS_PER_IP = 16;
 const MAX_TICKET_CAP_BYTES = 2 * 1024 * 1024 * 1024;
-const RESOLVE_TIMEOUT_MS = 8_000;
 
 const startIdleTimeout = (socket: WebSocket) =>
   Effect.runFork(
@@ -141,23 +140,6 @@ export async function startRelayServer(): Promise<RelayServer> {
     return stream;
   }) as typeof dht.connect;
 
-  const canResolvePeer = (publicKeyHex: string): Promise<boolean> =>
-    new Promise((resolve) => {
-      const stream = dht.connect(Buffer.from(publicKeyHex, "hex"));
-      let settled = false;
-      const finish = (reachable: boolean) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        stream.destroy();
-        resolve(reachable);
-      };
-      const timer = setTimeout(() => finish(false), RESOLVE_TIMEOUT_MS);
-      stream.once("open", () => finish(true));
-      stream.once("error", () => finish(false));
-      stream.once("close", () => finish(false));
-    });
-
   const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -175,9 +157,8 @@ export async function startRelayServer(): Promise<RelayServer> {
           return;
         }
 
-        let claims: RelayTicketClaims;
         try {
-          claims = verifyRelayTicketSync(ticketParam, ticketSecret);
+          verifyRelayTicketSync(ticketParam, ticketSecret);
         } catch {
           res.writeHead(401);
           res.end("Unauthorized");
@@ -191,12 +172,11 @@ export async function startRelayServer(): Promise<RelayServer> {
           return;
         }
 
-        const reachable = dhtReady && await canResolvePeer(claims.publicKey);
-        res.writeHead(reachable ? 200 : 503, {
+        res.writeHead(dhtReady ? 200 : 503, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
         });
-        res.end(JSON.stringify({ reachable, region: process.env.FLY_REGION ?? "unknown" }));
+        res.end(JSON.stringify({ reachable: dhtReady, region: process.env.FLY_REGION ?? "unknown" }));
         return;
       }
 

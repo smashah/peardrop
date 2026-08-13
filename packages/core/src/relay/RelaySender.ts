@@ -327,7 +327,18 @@ const attemptTransfer = (
     on(event: "error", listener: (error: unknown) => void): void;
     removeListener(event: "error", listener: (error: unknown) => void): void;
   };
+  const accepted = yield* Deferred.make<true, RelaySenderError>();
+  const done = yield* Deferred.make<RelaySendResult["files"], RelaySenderError>();
+  const failReceiver = (message: string, phase: RelayPhase, connectionFailure = true) =>
+    Deferred.fail(accepted, failure(phase, message, connectionFailure)).pipe(
+      Effect.andThen(Deferred.fail(done, failure(phase, message, connectionFailure)))
+    );
+  const onError = (cause: unknown) => {
+    Effect.runFork(failReceiver(cause instanceof Error ? cause.message : "Relay connection failed", "done"));
+  };
+  peerEvents.on("error", onError);
   yield* Effect.addFinalizer(() => Effect.sync(() => peer.destroy()));
+  yield* Effect.addFinalizer(() => Effect.sync(() => peerEvents.removeListener("error", onError)));
   yield* runPhase(context, "dht-connect", withTimeout(
     Effect.tryPromise({
       try: () => peer.opened,
@@ -339,13 +350,7 @@ const attemptTransfer = (
     failure("dht-connect", "Relay DHT connection timed out")
   ));
 
-  const accepted = yield* Deferred.make<true, RelaySenderError>();
-  const done = yield* Deferred.make<RelaySendResult["files"], RelaySenderError>();
   let received: Uint8Array<ArrayBufferLike> = new Uint8Array();
-  const failReceiver = (message: string, phase: RelayPhase, connectionFailure = true) =>
-    Deferred.fail(accepted, failure(phase, message, connectionFailure)).pipe(
-      Effect.andThen(Deferred.fail(done, failure(phase, message, connectionFailure)))
-    );
   const processIncoming = (chunk: Uint8Array) => Effect.gen(function* () {
     received = concat(received, chunk);
     if (received.byteLength > MAX_BUFFER_BYTES) {
@@ -393,17 +398,12 @@ const attemptTransfer = (
     ));
     incomingFibers.add(fiber);
   };
-  const onError = (cause: unknown) => {
-    Effect.runFork(failReceiver(cause instanceof Error ? cause.message : "Relay connection failed", "done"));
-  };
   peer.on("data", onData);
-  peerEvents.on("error", onError);
   yield* Effect.addFinalizer(() => Effect.gen(function* () {
     const teardownStartedAt = context.now();
     yield* report(context, { phase: "teardown", status: "start" });
     yield* Effect.forEach(incomingFibers, Fiber.interrupt, { discard: true });
     peer.removeListener("data", onData);
-    peerEvents.removeListener("error", onError);
     yield* report(context, {
       phase: "teardown",
       status: "complete",
