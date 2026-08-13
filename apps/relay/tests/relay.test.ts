@@ -3,6 +3,11 @@ import { EventEmitter } from "node:events";
 import { connect } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
+import DhtRelayDefault from "@hyperswarm/dht-relay";
+
+const dhtRelayRuntime = DhtRelayDefault as unknown as {
+  relay: (dht: unknown, stream: unknown) => void;
+};
 
 const dhtState = vi.hoisted(() => ({
   connectOutcome: "open" as "open" | "error" | "close",
@@ -134,6 +139,7 @@ describe("@peardrop/relay runtime contract", () => {
       await server.dht.destroy();
     }
     vi.resetModules();
+    vi.restoreAllMocks();
     delete process.env.PORT;
     delete process.env.RELAY_TICKET_SECRET;
     delete process.env.FLY_REGION;
@@ -173,7 +179,7 @@ describe("@peardrop/relay runtime contract", () => {
     expect(response.headers.has("fly-replay")).toBe(false);
   });
 
-  it("resolves a valid ticket when the DHT is ready", async () => {
+  it("admits a valid ticket when the DHT is ready", async () => {
     dhtState.readyImmediately = true;
     const server = await startServer();
     await new Promise((resolve) => setImmediate(resolve));
@@ -186,6 +192,7 @@ describe("@peardrop/relay runtime contract", () => {
   it("does not reject a valid ticket before its non-custodial WebSocket handoff", async () => {
     dhtState.readyImmediately = true;
     dhtState.connectOutcome = "error";
+    const relaySpy = vi.spyOn(dhtRelayRuntime, "relay");
     const server = await startServer();
     await new Promise((resolve) => setImmediate(resolve));
     const ticket = signTicket();
@@ -193,6 +200,7 @@ describe("@peardrop/relay runtime contract", () => {
     const response = await fetch(`${baseUrl(server)}/resolve?ticket=${ticket}`);
     expect(response.status).toBe(200);
     await openWebSocket(server, `/?ticket=${encodeURIComponent(ticket)}`);
+    expect(relaySpy).toHaveBeenCalledOnce();
   });
 
   it("rejects WebSocket upgrades until the DHT is ready", async () => {

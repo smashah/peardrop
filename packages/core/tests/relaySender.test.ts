@@ -11,6 +11,7 @@ let webSocketCloseCount = 0;
 let streamCancelCount = 0;
 let streamInvocationCount = 0;
 let deliveredFiles = [{ name: "message.txt", bytes: 5, sha256: "abc" }];
+let failDhtConnectWithError = false;
 
 vi.mock("@hyperswarm/dht-relay/ws", () => ({ default: class RelayStream {} }));
 vi.mock("@hyperswarm/dht-relay", () => ({
@@ -26,7 +27,13 @@ vi.mock("@hyperswarm/dht-relay", () => ({
         write: (frame: Uint8Array) => boolean;
         destroy: () => void;
       };
-      peer.opened = Promise.resolve(true);
+      peer.opened = failDhtConnectWithError
+        ? new Promise((_, reject) => queueMicrotask(() => {
+          const error = new Error("HOLEPUNCH_ABORTED");
+          peer.emit("error", error);
+          reject(error);
+        }))
+        : Promise.resolve(true);
       peer.write = (frame) => {
         writes.push(frame);
         const type = frame[4];
@@ -114,6 +121,7 @@ beforeEach(() => {
   streamCancelCount = 0;
   streamInvocationCount = 0;
   deliveredFiles = [{ name: "message.txt", bytes: 5, sha256: "abc" }];
+  failDhtConnectWithError = false;
 });
 
 describe("shared Relay sender", () => {
@@ -203,5 +211,18 @@ describe("shared Relay sender", () => {
     expect(webSocketCloseCount).toBeGreaterThan(0);
     expect(dhtDestroyCount).toBeGreaterThan(0);
     expect(streamCancelCount).toBe(1);
+  });
+
+  it("reports a DHT connection error without leaving it unhandled", async () => {
+    failDhtConnectWithError = true;
+    const exit = await Effect.runPromiseExit(Effect.scoped(sendRelay({
+      descriptor,
+      files: [file],
+      fallback: "none",
+      acceptTimeoutMs: 50,
+    }, adapters)));
+
+    expect(exit._tag).toBe("Failure");
+    expect(String(exit)).toContain("HOLEPUNCH_ABORTED");
   });
 });

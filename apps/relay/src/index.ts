@@ -172,12 +172,11 @@ export async function startRelayServer(): Promise<RelayServer> {
           return;
         }
 
-        const reachable = dhtReady;
-        res.writeHead(reachable ? 200 : 503, {
+        res.writeHead(dhtReady ? 200 : 503, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
         });
-        res.end(JSON.stringify({ reachable, region: process.env.FLY_REGION ?? "unknown" }));
+        res.end(JSON.stringify({ reachable: dhtReady, region: process.env.FLY_REGION ?? "unknown" }));
         return;
       }
 
