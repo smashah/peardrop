@@ -148,7 +148,7 @@ export async function startRelayServer(): Promise<RelayServer> {
     const deadline = Date.now() + RESOLVE_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
-      const query = dht.findPeer(publicKey, { hash: false, retries: 3 });
+      const query = dht.findPeer(publicKey, { retries: 3 });
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const reachable = await Promise.race([
