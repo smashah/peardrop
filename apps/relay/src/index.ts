@@ -168,13 +168,6 @@ export async function startRelayServer(): Promise<RelayServer> {
       }
 
       if (reqUrl.pathname === "/resolve") {
-        const requestedRegion = reqUrl.searchParams.get("region");
-        if (requestedRegion && requestedRegion !== process.env.FLY_REGION) {
-          res.writeHead(200, { "fly-replay": `region=${requestedRegion}` });
-          res.end();
-          return;
-        }
-
         const ticketParam = reqUrl.searchParams.get("ticket");
         if (!ticketParam) {
           res.writeHead(401);
@@ -188,6 +181,13 @@ export async function startRelayServer(): Promise<RelayServer> {
         } catch {
           res.writeHead(401);
           res.end("Unauthorized");
+          return;
+        }
+
+        const requestedRegion = reqUrl.searchParams.get("region");
+        if (requestedRegion && requestedRegion !== process.env.FLY_REGION) {
+          res.writeHead(200, { "fly-replay": `region=${requestedRegion}` });
+          res.end();
           return;
         }
 

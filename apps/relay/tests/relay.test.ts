@@ -152,6 +152,13 @@ describe("@peardrop/relay runtime contract", () => {
     expect(response.headers.get("fly-replay")).toBe("region=iad");
   });
 
+  it.each(["", "invalid-ticket"])("authenticates /resolve before foreign-region replay", async (ticket) => {
+    const server = await startServer();
+    const response = await fetch(`${baseUrl(server)}/resolve?ticket=${ticket}&region=iad`);
+    expect(response.status).toBe(401);
+    expect(response.headers.has("fly-replay")).toBe(false);
+  });
+
   it.each([
     ["open", 200, true],
     ["error", 503, false],
