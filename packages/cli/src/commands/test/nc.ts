@@ -8,6 +8,7 @@ export default class TestNcCommand extends Command {
   static override flags = {
     timeout: Flags.string({ description: "Bounded diagnostic timeout (5s to 2m)", default: "30s" }),
     json: Flags.boolean({ description: "Write structured diagnostic events and summary to stdout" }),
+    verbose: Flags.boolean({ char: "v", description: "Write detailed phase diagnostics (enabled by default)" }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi", hidden: true }),
   };
 
