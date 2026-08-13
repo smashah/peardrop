@@ -10,6 +10,13 @@
 
 
 
+
+## 1.5.3
+<sub>2026-08-13</sub>
+
+- [#59](https://github.com/smashah/peardrop/pull/59) [`e647ed4`](https://github.com/smashah/peardrop/commit/e647ed44c2bea594e37719bc26c38dca584a0c51)  *(patch)*
+  `test nc` now invokes the exact shared web-sender boundary (`sendRelay` from `@peardrop/core/relay`) that the hosted browser drop page, forced `send --relay`, and the relay e2e harness all use — it no longer spawns a CLI subprocess approximation of the protocol. After any failure, timeout, SIGINT, or SIGTERM, the diagnostic awaits bounded sender teardown and then watches the receiver for a documented 2-second terminal-consistency window; if the receiver delivers bytes the sender can no longer see — the invisible-live-attempt-after-failure condition behind the reported `dusky-nectar-yz7` Brand Store incident — the diagnostic turns red at `late-delivery` instead of reporting success from eventual byte delivery. Events are labeled `receiver`, `web-sender`, `relay`, or `harness` with monotonic phase timings. The on-receive hook now exports `resolveBunFromEnv` and documents that hooks always execute through the shell (`shell: true`) so Bun is resolved from `$PATH` (`PEARDROP_BUN` > `BUN` > bare `bun`) and never hardcoded to a machine-specific absolute path.
+
 ## 1.5.2
 <sub>2026-08-12</sub>
 
