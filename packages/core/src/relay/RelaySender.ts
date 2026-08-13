@@ -1,5 +1,4 @@
-import DHT from "@hyperswarm/dht-relay";
-import Stream from "@hyperswarm/dht-relay/ws";
+import DHT, { Stream } from "./dhtRelayRuntime.js";
 import type { WebSocketLike } from "@hyperswarm/dht-relay/ws";
 import { sha256 } from "@noble/hashes/sha256";
 import * as Data from "effect/Data";

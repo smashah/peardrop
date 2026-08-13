@@ -28,12 +28,11 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && esbuild src/relay/dhtRelayRuntime.ts --bundle --platform=browser --format=esm --target=es2022 --outfile=dist/relay/dhtRelayRuntime.js",
     "check-types": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@hyperswarm/dht-relay": "catalog:",
     "@noble/hashes": "1.7.1",
     "@x402/core": "catalog:",
     "@x402/evm": "catalog:",
@@ -45,7 +44,9 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@hyperswarm/dht-relay": "catalog:",
     "@effect/vitest": "catalog:",
+    "esbuild": "^0.28.1",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
