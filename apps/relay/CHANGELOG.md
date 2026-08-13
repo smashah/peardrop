@@ -17,6 +17,13 @@
 
 
 
+
+## 1.5.11
+<sub>2026-08-13</sub>
+
+- [#75](https://github.com/smashah/peardrop/pull/75) [`b3172a8`](https://github.com/smashah/peardrop/commit/b3172a84a67fd48b501991574259ad5d3d2452c9)  *(patch)*
+  Resolve authenticated receiver public keys through HyperDHT's hashed peer target so relay admission matches the direct connection path.
+
 ## 1.5.10
 <sub>2026-08-13</sub>
 

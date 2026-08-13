@@ -17,6 +17,12 @@
 
 
 
+
+## 1.5.11
+<sub>2026-08-13</sub>
+
+- *(patch)* Version bump from group with `@peardrop/relay` v1.5.11
+
 ## 1.5.10
 <sub>2026-08-13</sub>
 
