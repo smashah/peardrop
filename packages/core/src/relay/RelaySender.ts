@@ -543,9 +543,13 @@ export const sendRelay = (request: RelaySendRequest, adapters: RelaySenderAdapte
     if (Exit.isSuccess(first)) return first.value;
     const found = Exit.findError(first);
     if (found._tag !== "Success" || request.fallback === "none") return yield* first;
-    const fallbackReason = found.success.phase === "accept" && found.success.message === ACCEPT_TIMEOUT_MESSAGE
-      ? "accept-timeout"
-      : found.success.phase === "dht-connect"
+    const fallbackReason = found.success.phase === "accept"
+      ? found.success.message === ACCEPT_TIMEOUT_MESSAGE
+        ? "accept-timeout"
+        : found.success.connectionFailure === true
+          ? "pre-accept-connection-failed"
+          : undefined
+      : found.success.phase === "dht-connect" && found.success.connectionFailure === true
         ? "dht-connect-failed"
         : undefined;
     if (!fallbackReason) return yield* first;

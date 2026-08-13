@@ -14,6 +14,10 @@ let deliveredFiles = [{ name: "message.txt", bytes: 5, sha256: "abc" }];
 let failDhtConnectWithError = false;
 let holdDhtConnectOpen = false;
 let closeWebSocketAfterOpen = false;
+let closeNonCustodialBeforeAccept = false;
+let emitLateFramesAfterClose = false;
+let rejectReceiverBeforeAccept = false;
+let activeWebSocket: MockWebSocket | undefined;
 
 vi.mock("@hyperswarm/dht-relay/ws", () => ({ default: class RelayStream {} }));
 vi.mock("@hyperswarm/dht-relay", () => ({
@@ -46,7 +50,25 @@ vi.mock("@hyperswarm/dht-relay", () => ({
           return false;
         }
         if (type === 2 && !(rejectNonCustodial && !this.custodial)) {
-          queueMicrotask(() => peer.emit("data", encodeJson(3, { ok: true })));
+          if (rejectReceiverBeforeAccept && !this.custodial) {
+            queueMicrotask(() => peer.emit("data", encodeJson(7, {
+              code: "REJECTED",
+              message: "Receiver rejected this transfer",
+            })));
+          } else if (closeNonCustodialBeforeAccept && !this.custodial) {
+            queueMicrotask(() => activeWebSocket?.closeFromRelay());
+            if (emitLateFramesAfterClose) {
+              setTimeout(() => {
+                peer.emit("data", encodeJson(3, { ok: true }));
+                peer.emit("data", encodeJson(6, {
+                  ok: true,
+                  files: [{ name: "late.txt", bytes: 4, sha256: "late" }],
+                }));
+              }, 5);
+            }
+          } else {
+            queueMicrotask(() => peer.emit("data", encodeJson(3, { ok: true })));
+          }
         }
         if (type === 5 && !(rejectNonCustodial && !this.custodial)) {
           queueMicrotask(() => peer.emit("data", encodeJson(6, { ok: true, files: deliveredFiles })));
@@ -78,6 +100,7 @@ class MockWebSocket extends EventTarget {
   readonly readyState = 1;
   constructor() {
     super();
+    activeWebSocket = this;
     queueMicrotask(() => {
       this.dispatchEvent(new Event("open"));
       if (closeWebSocketAfterOpen) {
@@ -86,6 +109,9 @@ class MockWebSocket extends EventTarget {
     });
   }
   send() {}
+  closeFromRelay() {
+    this.dispatchEvent(Object.assign(new Event("close"), { code: 1005, reason: "" }));
+  }
   close() {
     webSocketCloseCount += 1;
   }
@@ -133,6 +159,10 @@ beforeEach(() => {
   failDhtConnectWithError = false;
   holdDhtConnectOpen = false;
   closeWebSocketAfterOpen = false;
+  closeNonCustodialBeforeAccept = false;
+  emitLateFramesAfterClose = false;
+  rejectReceiverBeforeAccept = false;
+  activeWebSocket = undefined;
 });
 
 describe("shared Relay sender", () => {
@@ -179,6 +209,46 @@ describe("shared Relay sender", () => {
     expect(events.some((event) => event.phase === "fallback" && event.reason === "accept-timeout")).toBe(true);
   });
 
+  it("falls back promptly after a deterministic transport close before ACCEPT", async () => {
+    closeNonCustodialBeforeAccept = true;
+    emitLateFramesAfterClose = true;
+    const events: Array<{ phase: string; status: string; reason?: string; attempt: number }> = [];
+
+    const result = await Effect.runPromise(Effect.scoped(sendRelay({
+      descriptor,
+      files: [file],
+      acceptTimeoutMs: 1_000,
+      acceptPollMs: 500,
+      onEvent: (event) => events.push(event),
+    }, adapters)));
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(result.mode).toBe("custodial-fallback");
+    expect(result.files).toEqual(deliveredFiles);
+    expect(custodialModes).toEqual([false, true]);
+    expect(events.some((event) =>
+      event.phase === "fallback"
+      && event.reason === "pre-accept-connection-failed"
+    )).toBe(true);
+
+    const firstTeardownComplete = events.findIndex((event) =>
+      event.attempt === 1 && event.phase === "teardown" && event.status === "complete"
+    );
+    const fallbackTicketStart = events.findIndex((event) =>
+      event.attempt === 2 && event.phase === "ticket-request" && event.status === "start"
+    );
+    expect(firstTeardownComplete).toBeGreaterThanOrEqual(0);
+    expect(fallbackTicketStart).toBeGreaterThan(firstTeardownComplete);
+
+    expect(events.some((event) =>
+      event.attempt === 1
+      && event.phase === "accept"
+      && event.status === "complete"
+    )).toBe(false);
+    expect(events.filter((event) => event.phase === "done" && event.status === "complete")).toHaveLength(1);
+  });
+
   it("fails at ACCEPT without custodial fallback when non-custodial-only is required", async () => {
     rejectNonCustodial = true;
     const exit = await Effect.runPromiseExit(Effect.scoped(sendRelay({
@@ -193,6 +263,20 @@ describe("shared Relay sender", () => {
     expect(exit._tag).toBe("Failure");
     expect(String(exit)).toContain("ACCEPT");
     expect(String(exit)).toContain(RelaySenderError.name);
+  });
+
+  it("keeps an explicit receiver rejection terminal before ACCEPT", async () => {
+    rejectReceiverBeforeAccept = true;
+
+    const exit = await Effect.runPromiseExit(Effect.scoped(sendRelay({
+      descriptor,
+      files: [file],
+      acceptTimeoutMs: 50,
+    }, adapters)));
+
+    expect(exit._tag).toBe("Failure");
+    expect(String(exit)).toContain("Receiver rejected this transfer");
+    expect(custodialModes).toEqual([false]);
   });
 
   it("closes the WebSocket and DHT when descriptor validation fails after connection", async () => {
@@ -213,12 +297,12 @@ describe("shared Relay sender", () => {
     const exit = await Effect.runPromiseExit(Effect.scoped(sendRelay({
       descriptor,
       files: [file],
-      fallback: "none",
       acceptTimeoutMs: 50,
     }, adapters)));
 
     expect(exit._tag).toBe("Failure");
     expect(String(exit)).toContain("Could not send");
+    expect(custodialModes).toEqual([false]);
     expect(webSocketCloseCount).toBeGreaterThan(0);
     expect(dhtDestroyCount).toBeGreaterThan(0);
     expect(streamCancelCount).toBe(1);
