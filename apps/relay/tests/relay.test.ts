@@ -2,6 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { connect } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import WebSocket from "ws";
 
 const dhtState = vi.hoisted(() => ({
   connectOutcome: "open" as "open" | "error" | "close",
@@ -101,6 +102,19 @@ async function rawUpgrade(server: RelayServer, path: string): Promise<string> {
   });
 }
 
+async function openWebSocket(server: RelayServer, path: string): Promise<void> {
+  const address = server.httpServer.address();
+  if (!address || typeof address === "string") throw new Error("Relay did not bind a TCP port");
+
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}${path}`);
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  socket.close();
+  await new Promise<void>((resolve) => socket.once("close", () => resolve()));
+}
+
 describe("@peardrop/relay runtime contract", () => {
   beforeEach(() => {
     process.env.PORT = "0";
@@ -159,18 +173,26 @@ describe("@peardrop/relay runtime contract", () => {
     expect(response.headers.has("fly-replay")).toBe(false);
   });
 
-  it.each([
-    ["open", 200, true],
-    ["error", 503, false],
-  ] as const)("maps peer resolution outcome %s to HTTP %s", async (outcome, status, reachable) => {
+  it("resolves a valid ticket when the DHT is ready", async () => {
     dhtState.readyImmediately = true;
-    dhtState.connectOutcome = outcome;
     const server = await startServer();
     await new Promise((resolve) => setImmediate(resolve));
 
     const response = await fetch(`${baseUrl(server)}/resolve?ticket=${signTicket()}`);
-    expect(response.status).toBe(status);
-    expect(await response.json()).toEqual({ reachable, region: "lhr" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ reachable: true, region: "lhr" });
+  });
+
+  it("does not reject a valid ticket before its non-custodial WebSocket handoff", async () => {
+    dhtState.readyImmediately = true;
+    dhtState.connectOutcome = "error";
+    const server = await startServer();
+    await new Promise((resolve) => setImmediate(resolve));
+    const ticket = signTicket();
+
+    const response = await fetch(`${baseUrl(server)}/resolve?ticket=${ticket}`);
+    expect(response.status).toBe(200);
+    await openWebSocket(server, `/?ticket=${encodeURIComponent(ticket)}`);
   });
 
   it("rejects WebSocket upgrades until the DHT is ready", async () => {
