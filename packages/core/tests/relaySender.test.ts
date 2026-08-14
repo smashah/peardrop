@@ -43,7 +43,7 @@ vi.mock("@hyperswarm/dht-relay", () => ({
         resourceEvents.push(`peer-listener-remove:${attempt}:${event}`);
         return removeListener(event, listener);
       }) as typeof peer.removeListener;
-      peer.opened = holdDhtConnectOpen
+      peer.opened = holdDhtConnectOpen && !this.custodial
         ? new Promise(() => undefined)
         : failDhtConnectWithError
         ? new Promise((_, reject) => queueMicrotask(() => {
@@ -127,8 +127,11 @@ class MockWebSocket extends EventTarget {
   closeFromRelay() {
     this.dispatchEvent(Object.assign(new Event("close"), { code: 1005, reason: "" }));
   }
+  messageFromRelay() {
+    this.dispatchEvent(new MessageEvent("message", { data: new Uint8Array([1]) }));
+  }
   override removeEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) {
-    if (type === "close") resourceEvents.push(`socket-listener-remove:${this.attempt}:close`);
+    if (type === "close" || type === "message") resourceEvents.push(`socket-listener-remove:${this.attempt}:${type}`);
     super.removeEventListener(type, listener, options);
   }
   close() {
@@ -169,7 +172,7 @@ const adapters = {
   })(),
 };
 
-const expectFirstAttemptTornDownBeforeFallback = () => {
+const expectFirstAttemptTornDownBeforeFallback = (expectDataListener = true) => {
   const teardownStart = resourceEvents.indexOf("teardown-start:1");
   const teardownComplete = resourceEvents.indexOf("teardown-complete:1");
   const fallbackTicket = resourceEvents.indexOf("ticket:2");
@@ -177,18 +180,19 @@ const expectFirstAttemptTornDownBeforeFallback = () => {
   expect(teardownComplete).toBeGreaterThan(teardownStart);
   expect(fallbackTicket).toBeGreaterThanOrEqual(0);
   expect(teardownComplete).toBeLessThan(fallbackTicket);
-  for (const completedDuringTeardown of [
+  const completedDuringTeardown = [
     "peer-destroy:1",
-    "peer-listener-remove:1:data",
     "peer-listener-remove:1:error",
     "peer-listener-remove:1:close",
     "dht-destroy:1",
     "socket-listener-remove:1:close",
     "socket-close:1",
-  ]) {
-    expect(resourceEvents).toContain(completedDuringTeardown);
+  ];
+  if (expectDataListener) completedDuringTeardown.push("peer-listener-remove:1:data");
+  for (const expectedEvent of completedDuringTeardown) {
+    expect(resourceEvents).toContain(expectedEvent);
     const duringTeardown = resourceEvents.findIndex((event, index) =>
-      index > teardownStart && event === completedDuringTeardown
+      index > teardownStart && event === expectedEvent
     );
     expect(duringTeardown).toBeGreaterThan(teardownStart);
     expect(duringTeardown).toBeLessThan(teardownComplete);
@@ -513,5 +517,49 @@ describe("shared Relay sender", () => {
     expect(exit._tag).toBe("Failure");
     expect(String(exit)).toContain("Relay WebSocket closed during transfer (code 1005)");
     expect(String(exit)).not.toContain("timed out");
+  });
+
+  it("falls back when the preferred DHT handshake stops making protocol progress", async () => {
+    vi.useFakeTimers();
+    try {
+      holdDhtConnectOpen = true;
+      const events: Array<{ phase: string; status: string; reason?: string; attempt: number }> = [];
+      const request = {
+        descriptor,
+        files: [file],
+        acceptTimeoutMs: 30_000,
+        onEvent: (event: { phase: string; status: string; reason?: string; attempt: number }) => {
+          events.push(event);
+          if (event.phase === "teardown") resourceEvents.push(`teardown-${event.status}:${event.attempt}`);
+        },
+      };
+      let settled = false;
+      const send = Effect.runPromise(Effect.scoped(sendRelay(request, adapters))).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(4_999);
+      sockets[0]!.messageFromRelay();
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      const result = await send;
+
+      expect(result.mode).toBe("custodial-fallback");
+      expect(events).toContainEqual(expect.objectContaining({
+        phase: "fallback",
+        reason: "dht-connect-failed",
+      }));
+      expectFirstAttemptTornDownBeforeFallback(false);
+      expect(resourceEvents).toContain("socket-listener-remove:1:message");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
