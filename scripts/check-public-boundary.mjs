@@ -21,6 +21,8 @@ const allowedFiles = new Set([
   "scripts/check-release-contract.mjs",
   "scripts/package-smoke.mjs",
   "skills/peardrop/SKILL.md",
+  "skills/peardrop/references/config-and-handoff.md",
+  "skills/peardrop/references/transport-diagnostics.md",
   "tsconfig.json",
   "turbo.json",
 ]);
