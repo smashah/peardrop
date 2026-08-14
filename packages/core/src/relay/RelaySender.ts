@@ -14,6 +14,7 @@ const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_BUFFER_BYTES = MAX_FRAME_BYTES + 5;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ACCEPT_POLL_MS = 5_000;
+const DEFAULT_CONNECT_NO_PROGRESS_MS = 5_000;
 const ACCEPT_TIMEOUT_MESSAGE = "Receiver did not ACCEPT the relay manifest in time";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -218,6 +219,30 @@ const withTimeout = <A, E>(effect: Effect.Effect<A, E>, durationMs: number, erro
     orElse: () => Effect.fail(error),
   });
 
+const failWhenSocketStopsProgressing = (
+  socket: RelayWebSocket,
+  durationMs: number,
+  error: RelaySenderError
+) => Effect.callback<never, RelaySenderError>((resume) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cleanup = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    socket.removeEventListener("message", onMessage);
+  };
+  const arm = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      cleanup();
+      resume(Effect.fail(error));
+    }, durationMs);
+  };
+  const onMessage = () => arm();
+  socket.addEventListener("message", onMessage);
+  arm();
+  return Effect.sync(cleanup);
+});
+
 const hashFile = (file: RelayFile, error: RelaySenderError) => Effect.suspend(() => {
     const digest = sha256.create();
     const reader = file.stream().getReader();
@@ -416,13 +441,24 @@ const attemptTransferScoped = (
     Effect.raceFirst(effect, Deferred.await(peerConnectionFailed));
   const guardConnection = <A>(phase: RelayPhase, effect: Effect.Effect<A, RelaySenderError>) =>
     guardTransport(phase, guardPeerConnection(effect));
-  yield* runPhase(context, "dht-connect", withTimeout(
-    guardConnection("dht-connect", Effect.tryPromise({
+  const openPeer = guardConnection("dht-connect", Effect.tryPromise({
       try: () => peer.opened,
       catch: (cause) => failure("dht-connect", cause instanceof Error ? cause.message : "Relay DHT connection failed"),
     }).pipe(Effect.flatMap((opened) => opened
       ? Effect.void
-      : Effect.fail(failure("dht-connect", "Relay DHT connection closed before opening"))))),
+      : Effect.fail(failure("dht-connect", "Relay DHT connection closed before opening")))));
+  const connect = custodial
+    ? openPeer
+    : Effect.raceFirst(
+      openPeer,
+      failWhenSocketStopsProgressing(
+        socket,
+        DEFAULT_CONNECT_NO_PROGRESS_MS,
+        failure("dht-connect", "Relay DHT handshake stopped making progress")
+      )
+    );
+  yield* runPhase(context, "dht-connect", withTimeout(
+    connect,
     timeoutMs,
     failure("dht-connect", "Relay DHT connection timed out")
   ));
