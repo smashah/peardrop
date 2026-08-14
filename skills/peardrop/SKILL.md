@@ -37,7 +37,7 @@ The Local equivalent is:
 npx --yes @peardrop/cli@latest local --spec ./drop.toml --target ./peardrop-inbox/ --json
 ```
 
-Keep the process alive. In JSON mode, parse the `session`, `connected`, and `delivered` events from stdout; human diagnostics belong on stderr. A successful one-use receiver exits after receiver-confirmed delivery. Before delivery it intentionally waits until delivery, TTL expiry, cancellation, or a signal.
+Keep the process alive. Hosted `receive --json` emits `session`, `connected`, `delivered`, and terminal `teardown` or `error` events on stdout. Local `local --json` instead emits `listening` and `closed`, including the hook result when a hook ran. Human diagnostics belong on stderr. A successful one-use receiver exits after receiver-confirmed delivery; before delivery it intentionally waits until delivery, TTL expiry, cancellation, or a signal.
 
 ## Do not hand over an unproved page
 

@@ -8,11 +8,13 @@ Build a field inventory before writing TOML. For each requested value, record it
 
 Field rules:
 
-- `secret` and `token` are masked by default. Use `text` for ordinary names, addresses, bank details, identifiers, and enumerated answers; do not mask them merely because the page is sensitive.
+- The complete field type set is `text`, `secret`, `token`, and `file`. `secret` and `token` are masked by default. Use `text` for ordinary names, addresses, bank details, identifiers, and enumerated answers; do not mask them merely because the page is sensitive.
 - `required` defaults to `true`, so write `required = false` for every genuinely optional field. An optional field may be blank; never instruct the sender to enter `-` or `N/A`.
-- Apply `minLength`, `maxLength`, and `format` only when the source requirement supports them. Do not apply a generic eight-character secret rule to a six-digit sort code.
+- `placeholder`, `minLength`, `maxLength`, and `format` apply only to `text`, `secret`, and `token`. Use `count` only with `file` to constrain how many files the field accepts. Do not attach an accepted-but-ignored validation key to the wrong type.
+- Apply validation only when the source requirement supports it. Do not apply a generic eight-character secret rule to a six-digit sort code. Use `message` only to replace the matching validation error with precise, non-secret guidance; it does not create a new constraint.
 - PearDrop currently has no `select` or `multiselect` field type. Until the product supports them, use a text field whose label and description list the exact allowed values; never leave the options implicit.
 - Use `[[groups]]` for related fields from one provider surface. A field belongs to at most one group, and its `group` must name a declared group.
+- `allOrNothing = true` controls whether an incomplete group is reported as outstanding or partial. It does not make optional fields required and does not independently block submission.
 - Use a directory target ending in `/` whenever the spec can deliver multiple files. Each field becomes its own delivered file.
 
 ## Make the page self-sufficient
@@ -119,6 +121,8 @@ Rendered field count:
 Rendered actionable links:
 Submit enabled and exercised on disposable session: yes | no
 Disposable received byte count/hash:
+Disposable selected transport: hyperdht | relay | local
+Disposable Relay mode: non-custodial | custodial-fallback | not-applicable
 Disposable receiver exit and public cancellation/consumption result:
 Disposable storage hook and per-sink result:
 Real session created after proof and untouched: yes | no
