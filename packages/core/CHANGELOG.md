@@ -20,6 +20,13 @@
 
 
 
+
+## 1.5.14
+<sub>2026-08-14</sub>
+
+- [#82](https://github.com/smashah/peardrop/pull/82) [`6c3aa29`](https://github.com/smashah/peardrop/commit/6c3aa29719590d5585342f132383fb7437725578)  *(patch)*
+  Fall back when the preferred browser relay handshake stops exchanging protocol frames, instead of waiting for the full 30-second connection timeout.
+
 ## 1.5.13
 <sub>2026-08-13</sub>
 
