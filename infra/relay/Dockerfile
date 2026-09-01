@@ -6,7 +6,7 @@ COPY patches ./patches
 COPY packages/core ./packages/core
 COPY apps/relay ./apps/relay
 
-RUN npm install --global pnpm@11.20.0 && pnpm install --frozen-lockfile
+RUN npm install --global pnpm@11.25.0 && pnpm install --frozen-lockfile
 RUN pnpm --filter @peardrop/core run build
 RUN pnpm --filter @peardrop/relay run build
 
