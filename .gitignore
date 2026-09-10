@@ -1,5 +1,10 @@
 node_modules/
 dist/
+# Copied into place by packages/cli's build script from the repo-root
+# skills/ directory — packages/cli/package.json's `files` ships it with the
+# published package. The root skills/ directory itself is the source of
+# truth and is never ignored.
+/packages/cli/skills/
 .turbo/
 .artifacts/
 .agent/

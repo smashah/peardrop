@@ -30,7 +30,11 @@ export default class StatusCommand extends Command {
     const output = {
       tunnelId: args.tunnelId,
       status,
-      local,
+      // `local` carries ownerToken, the receiver's management credential —
+      // JSON.stringify drops undefined-valued keys, so this keeps it out of
+      // `status --json` output without a second, drifting session shape
+      // (smashah/peardrop#86).
+      local: local ? { ...local, ownerToken: undefined } : null,
       remoteReachable: remote !== null,
       consumed: remote === null && local === null,
     };

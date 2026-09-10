@@ -1,0 +1,47 @@
+title = "Create the Google OAuth client"
+description = "Create this in the named GCP project only. Do not grant access to other projects or shared credentials."
+
+[copy]
+request = "Create the OAuth client using the link below, then paste the client ID and the client secret shown once. They will be stored in the approved vault and the plaintext delivery files will be removed."
+success = "Received by PearDrop. The receiver will now run the configured storage hook."
+failure = "The value was not accepted. Keep this page open and follow the field error."
+
+[hooks]
+on_receive = "./scripts/store-delivered-secret.sh"
+
+# The hosted secure.peardrop.fyi renderer does not yet render entry_url,
+# resource_name, or scope (smashah/peardrop.fyi#191) — it silently omits all
+# three. So the exact redirect URI, suggested client name, and scopes are
+# duplicated into this group's description as plain text too, or a sender on
+# that renderer sees copy telling them to use "the exact callback shown
+# below" with no callback visible. Remove this duplication once #191 lands;
+# the structured fields below already render correctly on the local bridge.
+[[groups]]
+name = "google_oauth_client"
+title = "Google OAuth client"
+description = "Create a new OAuth 2.0 Client ID in the example-project GCP project. Authorized redirect URI: https://example.com/auth/google/callback — Suggested client name: example-project-production — Scopes: openid, email, profile."
+link = { label = "Create OAuth client credentials", url = "https://console.cloud.google.com/apis/credentials" }
+allOrNothing = true
+
+[[fields]]
+name = "client_id"
+type = "text"
+label = "OAuth client ID"
+description = "Copy the client ID shown after creating the credential."
+group = "google_oauth_client"
+entry_url = "https://example.com/auth/google/callback"
+resource_name = "example-project-production"
+scope = ["openid", "email", "profile"]
+required = true
+format = "^[0-9]+-[a-z0-9]+\\.apps\\.googleusercontent\\.com$"
+
+[[fields]]
+name = "client_secret"
+type = "secret"
+label = "OAuth client secret"
+description = "Shown once at creation time — copy it before leaving the provider page."
+group = "google_oauth_client"
+shown_once = true
+required = true
+masked = true
+minLength = 20

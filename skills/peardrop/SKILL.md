@@ -37,11 +37,39 @@ The Local equivalent is:
 npx --yes @peardrop/cli@latest local --spec ./drop.toml --target ./peardrop-inbox/ --json
 ```
 
-Keep the process alive. Hosted `receive --json` emits `session`, `connected`, `delivered`, and terminal `teardown` or `error` events on stdout. Local `local --json` instead emits `listening` and `closed`, including the hook result when a hook ran. Human diagnostics belong on stderr. A successful one-use receiver exits after receiver-confirmed delivery; before delivery it intentionally waits until delivery, TTL expiry, cancellation, or a signal.
+Keep the process alive. Hosted `receive --json` emits `session`, then a bounded internal readiness check, then either `share_ready` or `share_pending`, then `connected`, `delivered`, and terminal `teardown` or `error`. **`share_ready` is the share gate: never hand the URL to the sender from any other event.** `share_pending` means the Worker has not yet confirmed the tunnel within the bounded wait; the receiver keeps running — wait and re-check `GET /api/tunnels/<slug>` rather than sharing early. Local `local --json` instead emits `listening` and `closed`, including the hook result when a hook ran. Human diagnostics belong on stderr. A successful one-use receiver exits after receiver-confirmed delivery; before delivery it intentionally waits until delivery, TTL expiry, cancellation, or a signal.
+
+No event carries owner authority any more — the JSON stream is safe to log and retain in full. `session`, `share_ready`, and `share_pending` include `cancelWith` (`peardrop cancel <slug>`); the receiver's own 0600 session file on disk is what makes that command work, not anything printed to stdout.
 
 ## Do not hand over an unproved page
 
-Before sending the real URL, complete the handoff receipt in [references/config-and-handoff.md](references/config-and-handoff.md). The minimum gate is:
+Never ask the user to paste a secret into chat. Never print values, raw errors containing values, owner tokens, tickets, private keys, or received secret contents. Validate file structure without echoing it.
+
+Acceptance has two tiers. Pick the tier before you start the receiver, not after.
+
+### Tier 1 — routine credential inbox
+
+Applies when the CLI version and page schema are already qualified and only the declarative content (title, fields, links, copy) varies — the normal case for an ordinary credential or secret inbox. **Tier 1 does not require a disposable transfer.** Target: under 90 seconds from a complete request to a shared URL.
+
+1. Create the target directory and restrict it before starting the receiver. Multi-field targets end in `/`:
+
+   ```bash
+   mkdir -p ./peardrop-inbox/ && chmod 700 ./peardrop-inbox/
+   ```
+
+2. Write the spec — from the worked example below when the shape matches, otherwise from [references/config-and-handoff.md](references/config-and-handoff.md).
+3. Start the receiver in the foreground, in its own long-lived pane (see the foreground-supervision recipe below).
+4. Wait for `share_ready` on stdout. Do not share on `session` — the tunnel may not be resolvable yet.
+5. Share the URL immediately once `share_ready` arrives.
+6. Everything else — persistence, issue filing, ledger and bookkeeping work — happens *after* the URL is shared, never on the minting path.
+
+Give the user a short receipt: CLI version, mode, target, TTL, PIN state, expected field count, and the `share_ready` URL and fingerprint.
+
+### Tier 2 — release or novel-path acceptance
+
+Scope: a new CLI or web release; a transport or lifecycle change; a new field type or rendering surface; an incident reproduction; or any handoff whose risk owner asks for full acceptance.
+
+Complete the full handoff receipt in [references/config-and-handoff.md](references/config-and-handoff.md). The minimum gate is:
 
 1. Record the exact published CLI version, requested mode, target, TTL, PIN state, and expected field count.
 2. Confirm every field's type, required/optional state, validation, label, instructions, scope, and deepest actionable HTTPS link against the source request. Do not invent or omit fields.
@@ -49,7 +77,63 @@ Before sending the real URL, complete the handoff receipt in [references/config-
 4. Create a fresh real session after the disposable proof. Never automate, submit, or consume the real handoff session.
 5. Give the user the URL, fingerprint, target, expiry, mode, PIN state, requested fields, and what happens after receipt.
 
-Never ask the user to paste a secret into chat. Never print values, raw errors containing values, owner tokens, tickets, private keys, or received secret contents. Validate file structure without echoing it.
+### Foreground-supervision recipe
+
+`--detach` is unavailable — background receiver supervision is not implemented (#88). One canonical pattern instead: the receiver owns a dedicated pane for its own lifetime; the agent reads its stdout from that pane; cleanup is `peardrop cancel <slug>` or Ctrl-C, both of which tear the Worker record down. Never background the receiver with `&` or `nohup` and lose its stdout — that is exactly the supervision `--detach` refuses to fake.
+
+### Worked example: grouped provider OAuth credential
+
+The recurring shape a plain single-field example doesn't cover: one provider console, a redirect URI the sender must carry to that console, explicit scopes, a suggested resource name, and a masked shown-once secret. This is `examples/google-oauth-client.toml` verbatim — `scripts/check-skill-example.mjs` fails CI if this copy drifts from that file.
+
+```toml
+title = "Create the Google OAuth client"
+description = "Create this in the named GCP project only. Do not grant access to other projects or shared credentials."
+
+[copy]
+request = "Create the OAuth client using the link below, then paste the client ID and the client secret shown once. They will be stored in the approved vault and the plaintext delivery files will be removed."
+success = "Received by PearDrop. The receiver will now run the configured storage hook."
+failure = "The value was not accepted. Keep this page open and follow the field error."
+
+[hooks]
+on_receive = "./scripts/store-delivered-secret.sh"
+
+# The hosted secure.peardrop.fyi renderer does not yet render entry_url,
+# resource_name, or scope (smashah/peardrop.fyi#191) — it silently omits all
+# three. So the exact redirect URI, suggested client name, and scopes are
+# duplicated into this group's description as plain text too, or a sender on
+# that renderer sees copy telling them to use "the exact callback shown
+# below" with no callback visible. Remove this duplication once #191 lands;
+# the structured fields below already render correctly on the local bridge.
+[[groups]]
+name = "google_oauth_client"
+title = "Google OAuth client"
+description = "Create a new OAuth 2.0 Client ID in the example-project GCP project. Authorized redirect URI: https://example.com/auth/google/callback — Suggested client name: example-project-production — Scopes: openid, email, profile."
+link = { label = "Create OAuth client credentials", url = "https://console.cloud.google.com/apis/credentials" }
+allOrNothing = true
+
+[[fields]]
+name = "client_id"
+type = "text"
+label = "OAuth client ID"
+description = "Copy the client ID shown after creating the credential."
+group = "google_oauth_client"
+entry_url = "https://example.com/auth/google/callback"
+resource_name = "example-project-production"
+scope = ["openid", "email", "profile"]
+required = true
+format = "^[0-9]+-[a-z0-9]+\\.apps\\.googleusercontent\\.com$"
+
+[[fields]]
+name = "client_secret"
+type = "secret"
+label = "OAuth client secret"
+description = "Shown once at creation time — copy it before leaving the provider page."
+group = "google_oauth_client"
+shown_once = true
+required = true
+masked = true
+minLength = 20
+```
 
 ## Store received secrets deliberately
 

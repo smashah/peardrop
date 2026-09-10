@@ -117,14 +117,32 @@ console.log(JSON.stringify({ event: "delivered", phase: "delivered", files: [{ p
 console.log(JSON.stringify({ event: "teardown", phase: "teardown", status: "complete" }));
 `;
 
+// Mirrors what the real receive.ts now does: the owner token never travels on
+// stdout (smashah/peardrop#86) — it lives only in the local 0600 session
+// file, which is exactly what nc.ts's cleanup now reads via `peardrop cancel`.
 const idleReceiverFixture = String.raw`
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+const sessionDir = join(homedir(), ".peardrop", "tunnels");
+await mkdir(sessionDir, { recursive: true });
+await writeFile(join(sessionDir, "test-drop.json"), JSON.stringify({
+  tunnelId: "test-drop",
+  url: "https://example.com/test-drop",
+  fingerprint: "fp",
+  target: "/tmp/peardrop-nc-fixture",
+  expiresAt: Date.now() + 60_000,
+  relayAllowed: true,
+  ownerToken: "owner-secret",
+  mode: "remote",
+  status: "waiting",
+}), { mode: 0o600 });
 process.once("SIGTERM", () => setTimeout(async () => {
   await writeFile(${JSON.stringify(CANCELLED_FILE)}, "yes");
   console.log(JSON.stringify({ event: "teardown", phase: "teardown", status: "cancelled" }));
   process.exit(0);
 }, 200));
-console.log(JSON.stringify({ event: "session", tunnelId: "test-drop", ownerToken: "owner-secret", phase: "session" }));
+console.log(JSON.stringify({ event: "session", tunnelId: "test-drop", phase: "session" }));
 setInterval(() => undefined, 1000);
 `;
 
@@ -211,6 +229,20 @@ afterEach(async () => {
   await rm(PAYLOAD_PENDING_FILE, { force: true });
   await rm(CANCELLED_FILE, { force: true });
 });
+
+/** Points ~/.peardrop at a throwaway directory so cleanup's `loadSession` never touches a real home directory. */
+const withIsolatedPeardropHome = async <T>(run: () => Promise<T>): Promise<T> => {
+  const originalHome = process.env.HOME;
+  const tempHome = await mkdtemp(join(tmpdir(), "peardrop-nc-home-"));
+  process.env.HOME = tempHome;
+  try {
+    return await run();
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    await rm(tempHome, { recursive: true, force: true });
+  }
+};
 
 describe("test nc diagnostic safety", () => {
   it("publishes only a complete fixture payload at the watched path", async () => {
@@ -314,36 +346,38 @@ describe("test nc diagnostic safety", () => {
     const worker = await startWorkerDouble();
     vi.spyOn(process.stdout, "write").mockImplementation((() => true) as typeof process.stdout.write);
     try {
-      let failure: NcDiagnosticError | undefined;
-      try {
-        await runNcDiagnostic({
-          binPath,
-          timeoutMs: 5_000,
-          workerUrl: worker.url,
-          json: true,
-          runWebSender: stubFailingWebSender,
+      await withIsolatedPeardropHome(async () => {
+        let failure: NcDiagnosticError | undefined;
+        try {
+          await runNcDiagnostic({
+            binPath,
+            timeoutMs: 5_000,
+            workerUrl: worker.url,
+            json: true,
+            runWebSender: stubFailingWebSender,
+          });
+        } catch (cause) {
+          if (cause instanceof NcDiagnosticError) failure = cause;
+          else throw cause;
+        }
+        expect(failure?.summary.phase).toBe("done");
+        expect(failure?.summary.senderOutcome).toBe("failed");
+        expect(failure?.summary.senderExitCode).toBe(1);
+        expect(worker.requests).toContainEqual({
+          method: "DELETE",
+          url: "/api/tunnels/test-drop",
+          authorization: "Bearer owner-secret",
         });
-      } catch (cause) {
-        if (cause instanceof NcDiagnosticError) failure = cause;
-        else throw cause;
-      }
-      expect(failure?.summary.phase).toBe("done");
-      expect(failure?.summary.senderOutcome).toBe("failed");
-      expect(failure?.summary.senderExitCode).toBe(1);
-      expect(worker.requests).toContainEqual({
-        method: "DELETE",
-        url: "/api/tunnels/test-drop",
-        authorization: "Bearer owner-secret",
+        expect(await exists(CANCELLED_FILE)).toBe(true);
+        expect(failure?.summary.artifactPath).toBeDefined();
+        const artifact = await readFile(failure!.summary.artifactPath!, "utf8");
+        expect(artifact).toContain('"phase":"done"');
+        expect(artifact).not.toContain("owner-secret");
+        expect(artifact).toContain('"phase":"late-delivery-watch"');
+        const artifactEvents = artifact.trim().split("\n").map((line) => JSON.parse(line) as { data: { event?: string; status?: string } });
+        expect(artifactEvents.at(-1)?.data).toMatchObject({ event: "summary", status: "failed" });
+        await rm(failure!.summary.artifactPath!, { force: true });
       });
-      expect(await exists(CANCELLED_FILE)).toBe(true);
-      expect(failure?.summary.artifactPath).toBeDefined();
-      const artifact = await readFile(failure!.summary.artifactPath!, "utf8");
-      expect(artifact).toContain('"phase":"done"');
-      expect(artifact).not.toContain("owner-secret");
-      expect(artifact).toContain('"phase":"late-delivery-watch"');
-      const artifactEvents = artifact.trim().split("\n").map((line) => JSON.parse(line) as { data: { event?: string; status?: string } });
-      expect(artifactEvents.at(-1)?.data).toMatchObject({ event: "summary", status: "failed" });
-      await rm(failure!.summary.artifactPath!, { force: true });
     } finally {
       await worker.close();
     }
@@ -394,30 +428,32 @@ describe("test nc diagnostic safety", () => {
     const worker = await startWorkerDouble();
     vi.spyOn(process.stdout, "write").mockImplementation((() => true) as typeof process.stdout.write);
     try {
-      const diagnostic = runNcDiagnostic({
-        binPath,
-        timeoutMs: 30_000,
-        workerUrl: worker.url,
-        json: true,
-        runWebSender: stubInterruptibleWebSender,
+      await withIsolatedPeardropHome(async () => {
+        const diagnostic = runNcDiagnostic({
+          binPath,
+          timeoutMs: 30_000,
+          workerUrl: worker.url,
+          json: true,
+          runWebSender: stubInterruptibleWebSender,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        process.emit("SIGINT", "SIGINT");
+        let failure: NcDiagnosticError | undefined;
+        try {
+          await diagnostic;
+        } catch (cause) {
+          if (cause instanceof NcDiagnosticError) failure = cause;
+          else throw cause;
+        }
+        expect(failure?.summary.phase).toBe("signal");
+        expect(failure?.summary.senderOutcome).toBe("interrupted");
+        expect(worker.requests).toContainEqual({
+          method: "DELETE",
+          url: "/api/tunnels/test-drop",
+          authorization: "Bearer owner-secret",
+        });
+        expect(await exists(CANCELLED_FILE)).toBe(true);
       });
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      process.emit("SIGINT", "SIGINT");
-      let failure: NcDiagnosticError | undefined;
-      try {
-        await diagnostic;
-      } catch (cause) {
-        if (cause instanceof NcDiagnosticError) failure = cause;
-        else throw cause;
-      }
-      expect(failure?.summary.phase).toBe("signal");
-      expect(failure?.summary.senderOutcome).toBe("interrupted");
-      expect(worker.requests).toContainEqual({
-        method: "DELETE",
-        url: "/api/tunnels/test-drop",
-        authorization: "Bearer owner-secret",
-      });
-      expect(await exists(CANCELLED_FILE)).toBe(true);
     } finally {
       process.removeAllListeners("SIGINT");
       await worker.close();

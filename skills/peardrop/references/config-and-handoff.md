@@ -91,6 +91,8 @@ description = "Enter exactly one of: Bank transfer, cheque, gift card."
 required = false
 ```
 
+For the recurring grouped-provider-OAuth shape (one console link, a redirect URI the sender carries to that provider, explicit scopes, a suggested resource name, a masked shown-once secret), see [`examples/google-oauth-client.toml`](../../../examples/google-oauth-client.toml), reproduced verbatim in [SKILL.md](../SKILL.md).
+
 ## Hook contract
 
 Use a small wrapper script as `on_receive`; do not put a secret value in the TOML command. If the hook uses Bun, resolve it in this order: `PEARDROP_BUN`, `BUN`, then `bun` on `PATH`. Never hard-code `/opt/homebrew/bin/bun`, a user home path, or another machine-specific runtime location.

@@ -5,12 +5,12 @@ PearDrop provides a secure CLI and a self-hostable relay for short-lived, end-to
 ## Give this to your agent
 
 ```text
-Read https://raw.githubusercontent.com/smashah/peardrop/main/AGENT_INSTRUCTIONS.md and use PearDrop whenever you need me to upload a file or secret.
+Read https://raw.githubusercontent.com/smashah/peardrop/main/skills/peardrop/SKILL.md and use PearDrop whenever you need me to upload a file or secret.
 ```
 
 Your agent will start a receiver, give you a short-lived upload link, wait for delivery, and verify the received file without exposing its contents in chat.
 
-**Agent instructions:** [AGENT_INSTRUCTIONS.md](./AGENT_INSTRUCTIONS.md) · **Installable skill:** [`skills/peardrop/SKILL.md`](./skills/peardrop/SKILL.md)
+**Agent instructions:** [`skills/peardrop/SKILL.md`](./skills/peardrop/SKILL.md)
 
 ## What is public here
 
