@@ -109,7 +109,11 @@ describe("peardrop CLI", () => {
 
     it("only issues the cancellation DELETE when a signal was actually received", () => {
       const signalFlagSet = text.indexOf("signalReceived = true");
-      const finallyBlock = text.indexOf("} finally {");
+      // pollShareReadiness's own per-request cleanup adds an earlier
+      // "} finally {" (module scope, ahead of the class) — search from
+      // signalFlagSet so this still finds the DHT-receiver finally block the
+      // cancellation-ordering guarantee actually depends on.
+      const finallyBlock = text.indexOf("} finally {", signalFlagSet);
       const deleteCall = text.indexOf(`method: "DELETE"`);
       expect(signalFlagSet).toBeGreaterThan(-1);
       expect(finallyBlock).toBeGreaterThan(signalFlagSet);
@@ -351,6 +355,34 @@ describe("peardrop CLI", () => {
       const fetchTunnel = vi.fn(async () => ({ ok: false }));
       const result = await pollShareReadiness({ fetchTunnel, signal: new AbortController().signal, sleep: instantSleep, budgetMs: 0 });
       expect(result).toBe("pending");
+    });
+
+    // fetch has no response timeout of its own: a Worker that accepts the
+    // connection and stalls before sending headers would otherwise hang the
+    // receiver forever instead of ever reporting share_pending.
+    it("bounds a single request that never settles, yielding pending within budget instead of hanging", async () => {
+      const fetchTunnel = vi.fn(
+        (signal: AbortSignal) =>
+          new Promise<{ ok: boolean }>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          })
+      );
+      const result = await pollShareReadiness({ fetchTunnel, signal: new AbortController().signal, sleep: instantSleep, budgetMs: 20 });
+      expect(result).toBe("pending");
+      expect(fetchTunnel).toHaveBeenCalledTimes(1);
+    });
+
+    it("distinguishes the receiver's own abort from a budget timeout", async () => {
+      const external = new AbortController();
+      const fetchTunnel = vi.fn(
+        (signal: AbortSignal) =>
+          new Promise<{ ok: boolean }>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          })
+      );
+      const pending = pollShareReadiness({ fetchTunnel, signal: external.signal, sleep: instantSleep, budgetMs: 5_000 });
+      external.abort();
+      expect(await pending).toBe("aborted");
     });
   });
 

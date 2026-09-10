@@ -67,9 +67,18 @@ export interface PollShareReadinessOptions {
 
 /**
  * Bounded poll for Worker tunnel-registration propagation. Extracted as a
- * pure function (fetch/sleep injected) so its three outcomes — resolves
- * immediately, resolves after retries, never resolves in budget — are
- * directly unit-testable without a live Worker or a real receiver session.
+ * pure function (fetch/sleep injected) so its outcomes — resolves
+ * immediately, resolves after retries, never resolves in budget, a single
+ * request that never settles — are directly unit-testable without a live
+ * Worker or a real receiver session.
+ *
+ * `fetch` has no response timeout of its own: a Worker that accepts the
+ * connection and then stalls before sending headers hangs the request
+ * indefinitely. Each attempt is therefore bounded to the remaining budget by
+ * its own AbortController, distinct from `options.signal` (the receiver's
+ * own Ctrl-C/SIGTERM signal) — a budget timeout must resolve to "pending",
+ * while the receiver's own signal must resolve to "aborted", and the two are
+ * never conflated.
  */
 export async function pollShareReadiness(options: PollShareReadinessOptions): Promise<ShareReadiness> {
   const budgetMs = options.budgetMs ?? READINESS_BUDGET_MS;
@@ -77,15 +86,29 @@ export async function pollShareReadiness(options: PollShareReadinessOptions): Pr
   let pollMs = READINESS_POLL_INITIAL_MS;
   while (true) {
     if (options.signal.aborted) return "aborted";
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return "pending";
+
+    const requestController = new AbortController();
+    const onExternalAbort = () => requestController.abort();
+    options.signal.addEventListener("abort", onExternalAbort, { once: true });
+    const requestTimer = setTimeout(() => requestController.abort(), remaining);
     try {
-      const res = await options.fetchTunnel(options.signal);
+      const res = await options.fetchTunnel(requestController.signal);
       if (res.ok) return "ready";
     } catch {
       if (options.signal.aborted) return "aborted";
+      // Either this request's own budget-bound timer fired, or it failed for
+      // an unrelated transient reason — either way, fall through to the
+      // budget check below rather than distinguishing further.
+    } finally {
+      clearTimeout(requestTimer);
+      options.signal.removeEventListener("abort", onExternalAbort);
     }
-    const remaining = deadline - performance.now();
-    if (remaining <= 0) return "pending";
-    await options.sleep(Math.min(pollMs, remaining), options.signal);
+
+    const remainingAfter = deadline - performance.now();
+    if (remainingAfter <= 0) return "pending";
+    await options.sleep(Math.min(pollMs, remainingAfter), options.signal);
     pollMs = Math.min(pollMs * 2, READINESS_POLL_MAX_MS);
   }
 }

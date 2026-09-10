@@ -546,7 +546,20 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
       // (smashah/peardrop#86) — read it back the same way `cancel.ts` does,
       // from the receiver's own 0600 local session file, instead of the
       // in-memory value this harness used to scrape off the `session` line.
-      const localSession = await runEffect(loadSession(sessionSlug));
+      // A missing or malformed session file must degrade to "no token, skip
+      // the remote DELETE" rather than reject here: an uncaught rejection in
+      // this finally would skip receiver termination, temp-dir removal, and
+      // artifact finalization below, and could mask a pending
+      // NcDiagnosticError with this storage error instead.
+      const localSession = await runEffect(loadSession(sessionSlug)).catch((cause) => {
+        record("harness", "internal", process.pid, {
+          event: "cleanup",
+          phase: "tunnel-cancel",
+          status: "failed",
+          error: `local session load failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        });
+        return null;
+      });
       if (localSession?.ownerToken) {
         const cancellation = new AbortController();
         const cancellationTimeout = setTimeout(() => cancellation.abort(), 5_000);

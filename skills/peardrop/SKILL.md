@@ -39,7 +39,7 @@ npx --yes @peardrop/cli@latest local --spec ./drop.toml --target ./peardrop-inbo
 
 Keep the process alive. Hosted `receive --json` emits `session`, then a bounded internal readiness check, then either `share_ready` or `share_pending`, then `connected`, `delivered`, and terminal `teardown` or `error`. **`share_ready` is the share gate: never hand the URL to the sender from any other event.** `share_pending` means the Worker has not yet confirmed the tunnel within the bounded wait; the receiver keeps running — wait and re-check `GET /api/tunnels/<slug>` rather than sharing early. Local `local --json` instead emits `listening` and `closed`, including the hook result when a hook ran. Human diagnostics belong on stderr. A successful one-use receiver exits after receiver-confirmed delivery; before delivery it intentionally waits until delivery, TTL expiry, cancellation, or a signal.
 
-No event carries owner authority any more — the JSON stream is safe to log and retain in full. Every event includes `cancelWith` (`peardrop cancel <slug>`); the receiver's own 0600 session file on disk is what makes that command work, not anything printed to stdout.
+No event carries owner authority any more — the JSON stream is safe to log and retain in full. `session`, `share_ready`, and `share_pending` include `cancelWith` (`peardrop cancel <slug>`); the receiver's own 0600 session file on disk is what makes that command work, not anything printed to stdout.
 
 ## Do not hand over an unproved page
 
