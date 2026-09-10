@@ -92,15 +92,25 @@ export async function pollShareReadiness(options: PollShareReadinessOptions): Pr
     const requestController = new AbortController();
     const onExternalAbort = () => requestController.abort();
     options.signal.addEventListener("abort", onExternalAbort, { once: true });
-    const requestTimer = setTimeout(() => requestController.abort(), remaining);
+    // The timer is the authority on its own expiry — re-deriving "budget
+    // exhausted" from performance.now() after the abort races the timer
+    // itself (setTimeout can fire a fraction of a millisecond before the
+    // clock agrees the deadline has passed), which made the number of
+    // attempts depend on sub-millisecond rounding. A flag set only by this
+    // callback is unambiguous regardless of what the clock says afterward.
+    let budgetExpired = false;
+    const requestTimer = setTimeout(() => {
+      budgetExpired = true;
+      requestController.abort();
+    }, remaining);
     try {
       const res = await options.fetchTunnel(requestController.signal);
       if (res.ok) return "ready";
     } catch {
       if (options.signal.aborted) return "aborted";
-      // Either this request's own budget-bound timer fired, or it failed for
-      // an unrelated transient reason — either way, fall through to the
-      // budget check below rather than distinguishing further.
+      if (budgetExpired) return "pending";
+      // An unrelated transient error — fall through to the budget check
+      // below rather than treating it as exhausted.
     } finally {
       clearTimeout(requestTimer);
       options.signal.removeEventListener("abort", onExternalAbort);
