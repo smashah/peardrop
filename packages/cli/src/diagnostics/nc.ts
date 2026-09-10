@@ -16,7 +16,7 @@ import {
   type RelaySendResult,
   type RelayWebSocket,
 } from "@peardrop/core/relay";
-import { runEffect } from "@peardrop/core/node";
+import { loadSession, runEffect } from "@peardrop/core/node";
 import * as Effect from "effect/Effect";
 import WebSocket from "ws";
 
@@ -222,7 +222,6 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
   const runWebSender = options.runWebSender ?? defaultWebSender;
   let receiver: ChildProcess | undefined;
   let sessionSlug: string | undefined;
-  let sessionOwnerToken: string | undefined;
   let receiverDelivered: JsonObject | undefined;
   let receiverDeliveredAt: number | undefined;
   let lastPhase: string | undefined;
@@ -302,7 +301,6 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
       const parsed = parseJsonLine(line);
       if (parsed?.event === "session" && typeof parsed.tunnelId === "string") {
         sessionSlug = parsed.tunnelId;
-        if (typeof parsed.ownerToken === "string") sessionOwnerToken = parsed.ownerToken;
         resolveSession?.(parsed.tunnelId);
       }
       if (parsed?.event === "delivered") {
@@ -543,30 +541,37 @@ export async function runNcDiagnostic(options: NcDiagnosticOptions): Promise<NcD
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
     senderAbort.abort();
-    if (!succeeded && sessionSlug && sessionOwnerToken) {
-      const cancellation = new AbortController();
-      const cancellationTimeout = setTimeout(() => cancellation.abort(), 5_000);
-      try {
-        const response = await fetch(`${options.workerUrl.replace(/\/$/, "")}/api/tunnels/${sessionSlug}`, {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${sessionOwnerToken}` },
-          signal: cancellation.signal,
-        });
-        record("harness", "internal", process.pid, {
-          event: "cleanup",
-          phase: "tunnel-cancel",
-          status: response.ok || response.status === 404 ? "complete" : "failed",
-          httpStatus: response.status,
-        });
-      } catch (cause) {
-        record("harness", "internal", process.pid, {
-          event: "cleanup",
-          phase: "tunnel-cancel",
-          status: "failed",
-          error: cause instanceof Error ? cause.message : String(cause),
-        });
-      } finally {
-        clearTimeout(cancellationTimeout);
+    if (!succeeded && sessionSlug) {
+      // The receiver's `ownerToken` no longer travels on stdout
+      // (smashah/peardrop#86) — read it back the same way `cancel.ts` does,
+      // from the receiver's own 0600 local session file, instead of the
+      // in-memory value this harness used to scrape off the `session` line.
+      const localSession = await runEffect(loadSession(sessionSlug));
+      if (localSession?.ownerToken) {
+        const cancellation = new AbortController();
+        const cancellationTimeout = setTimeout(() => cancellation.abort(), 5_000);
+        try {
+          const response = await fetch(`${options.workerUrl.replace(/\/$/, "")}/api/tunnels/${sessionSlug}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${localSession.ownerToken}` },
+            signal: cancellation.signal,
+          });
+          record("harness", "internal", process.pid, {
+            event: "cleanup",
+            phase: "tunnel-cancel",
+            status: response.ok || response.status === 404 ? "complete" : "failed",
+            httpStatus: response.status,
+          });
+        } catch (cause) {
+          record("harness", "internal", process.pid, {
+            event: "cleanup",
+            phase: "tunnel-cancel",
+            status: "failed",
+            error: cause instanceof Error ? cause.message : String(cause),
+          });
+        } finally {
+          clearTimeout(cancellationTimeout);
+        }
       }
     }
     await terminateChild(receiver, RECEIVER_TEARDOWN_GRACE_MS);

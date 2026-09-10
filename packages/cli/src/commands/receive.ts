@@ -51,6 +51,45 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
     signal.addEventListener("abort", done, { once: true });
   });
 
+/** Total budget for `pollShareReadiness` to confirm `GET /api/tunnels/{slug}` before giving up and reporting `share_pending`. */
+export const READINESS_BUDGET_MS = 15_000;
+const READINESS_POLL_INITIAL_MS = 250;
+const READINESS_POLL_MAX_MS = 2_000;
+
+export type ShareReadiness = "ready" | "pending" | "aborted";
+
+export interface PollShareReadinessOptions {
+  readonly fetchTunnel: (signal: AbortSignal) => Promise<{ ok: boolean }>;
+  readonly signal: AbortSignal;
+  readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+  readonly budgetMs?: number;
+}
+
+/**
+ * Bounded poll for Worker tunnel-registration propagation. Extracted as a
+ * pure function (fetch/sleep injected) so its three outcomes — resolves
+ * immediately, resolves after retries, never resolves in budget — are
+ * directly unit-testable without a live Worker or a real receiver session.
+ */
+export async function pollShareReadiness(options: PollShareReadinessOptions): Promise<ShareReadiness> {
+  const budgetMs = options.budgetMs ?? READINESS_BUDGET_MS;
+  const deadline = performance.now() + budgetMs;
+  let pollMs = READINESS_POLL_INITIAL_MS;
+  while (true) {
+    if (options.signal.aborted) return "aborted";
+    try {
+      const res = await options.fetchTunnel(options.signal);
+      if (res.ok) return "ready";
+    } catch {
+      if (options.signal.aborted) return "aborted";
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return "pending";
+    await options.sleep(Math.min(pollMs, remaining), options.signal);
+    pollMs = Math.min(pollMs * 2, READINESS_POLL_MAX_MS);
+  }
+}
+
 export default class ReceiveCommand extends Command {
   static override description = "Start a P2P receiver session to accept files or secrets";
 
@@ -73,7 +112,9 @@ export default class ReceiveCommand extends Command {
     json: Flags.boolean({ description: "Output JSON metadata" }),
     verbose: Flags.boolean({ char: "v", description: "Write phase diagnostics to stderr" }),
     name: Flags.string({ description: "Optional tunnel label" }),
-    detach: Flags.boolean({ description: "Run receiver in background" }),
+    // Hidden, not removed: #88's accepted resolution is to stop advertising
+    // background supervision this CLI doesn't implement, not to implement it.
+    detach: Flags.boolean({ description: "Run receiver in background", hidden: true }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
     spec: Flags.string({ description: "Path to a TOML drop-page spec file", exclusive: ["spec-inline"] }),
     "spec-inline": Flags.string({ description: "Inline TOML drop-page spec", exclusive: ["spec"] }),
@@ -148,7 +189,7 @@ export default class ReceiveCommand extends Command {
 
     if (flags.detach) {
       return this.fail(
-        "--detach is unavailable until supervised receiver persistence is implemented; run receive in the foreground.",
+        "--detach is unavailable — supervised receiver persistence is not implemented; run receive in the foreground, in its own long-lived pane, per the foreground-supervision recipe in skills/peardrop/SKILL.md.",
         flags.json
       );
     }
@@ -204,35 +245,40 @@ export default class ReceiveCommand extends Command {
 
     await runEffect(saveSession(tunnelState));
 
+    // The safe cancellation reference for every event below: cancel.ts already
+    // loads the owner token back out of the 0600 session file on disk, so no
+    // authority has to travel through stdout for cancellation to work.
+    const cancelWith = `peardrop cancel ${tunnelState.tunnelId}`;
+    const fieldCount = spec ? spec.fields.length : 1;
+
     if (flags.json) {
       // Single-line, compact and flushed so a piped consumer can read one line
       // and parse the Drop URL immediately, the same way `local --json` does.
+      // Built explicitly rather than spread from tunnelState — tunnelState
+      // carries ownerToken, the receiver's management credential, and a
+      // spread would put it in an agent transcript that outlives the process
+      // (peardrop#86).
       await writeStdout(JSON.stringify({
-        ...tunnelState,
+        tunnelId: tunnelState.tunnelId,
+        url: tunnelState.url,
+        fingerprint: tunnelState.fingerprint,
+        target: tunnelState.target,
+        expiresAt: tunnelState.expiresAt,
+        relayAllowed: tunnelState.relayAllowed,
+        workerUrl: tunnelState.workerUrl,
+        mode: tunnelState.mode,
+        status: tunnelState.status,
+        pin: tunnelState.pin,
         event: "session",
         relayFallbackAllowed: tunnelState.relayAllowed,
         selectedTransport: null,
+        cancelWith,
         elapsedMs: elapsedMs(),
         pid: process.pid,
       }));
       writeVerbose("session", { status: "waiting", relayFallbackAllowed: tunnelState.relayAllowed });
-    } else {
-      const freeTierMB = RELAY_FREE_TIER_BYTES / (1024 * 1024);
-      if (flags.verbose) {
-        writeVerbose("session", { status: "waiting", relayFallbackAllowed: tunnelState.relayAllowed, target: flags.target });
-      } else {
-        this.log("\n=========================================");
-        this.log(` PearDrop Receiver Active`);
-        this.log(` URL: ${tunnelState.url}`);
-        this.log(` Fingerprint: ${fingerprint}`);
-        if (pinCode) this.log(` PIN required: ${pinCode}`);
-        this.log(` Target path: ${flags.target}`);
-        this.log(
-          ` Relay fallback: ${tunnelState.relayAllowed ? `Allowed (free up to ${freeTierMB}MB, then metered — max $0.06)` : "Disallowed (Direct-only)"}`
-        );
-        this.log("=========================================\n");
-        this.log("Waiting for sender connection...");
-      }
+    } else if (flags.verbose) {
+      writeVerbose("session", { status: "waiting", relayFallbackAllowed: tunnelState.relayAllowed, target: flags.target });
     }
 
     const abort = new AbortController();
@@ -252,6 +298,65 @@ export default class ReceiveCommand extends Command {
     };
     process.on("SIGINT", onSignal);
     process.on("SIGTERM", onSignal);
+
+    // The Worker needs a propagation moment before GET /api/tunnels/{slug}
+    // answers 200 — sharing the URL the instant registration returns can hand
+    // an agent a link that still 404s. Poll here, bounded, instead of leaving
+    // every operator to hand-write the same curl loop.
+    const readiness = await pollShareReadiness({
+      fetchTunnel: (signal) => fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}`, { signal }),
+      signal: abort.signal,
+      sleep,
+    });
+
+    const printBanner = (pending: boolean) => {
+      const freeTierMB = RELAY_FREE_TIER_BYTES / (1024 * 1024);
+      this.log("\n=========================================");
+      this.log(` PearDrop Receiver Active`);
+      this.log(` URL: ${tunnelState.url}`);
+      this.log(` Fingerprint: ${fingerprint}`);
+      if (pinCode) this.log(` PIN required: ${pinCode}`);
+      this.log(` Target path: ${flags.target}`);
+      this.log(
+        ` Relay fallback: ${tunnelState.relayAllowed ? `Allowed (free up to ${freeTierMB}MB, then metered — max $0.06)` : "Disallowed (Direct-only)"}`
+      );
+      this.log("=========================================\n");
+      if (pending) {
+        this.log(`Not yet resolvable — re-check GET /api/tunnels/${tunnelState.tunnelId} before sharing this URL.`);
+      }
+      this.log("Waiting for sender connection...");
+    };
+
+    if (readiness !== "aborted") {
+      const shareFields = {
+        mode: "remote" as const,
+        url: tunnelState.url,
+        fingerprint,
+        expiresAt: tunnelState.expiresAt,
+        target: flags.target,
+        tunnelId: tunnelState.tunnelId,
+        fieldCount,
+        ...(pinCode !== undefined ? { pin: pinCode } : {}),
+        cancelWith,
+      };
+      if (readiness === "ready") {
+        // The only event an agent may share a URL from.
+        if (flags.json) {
+          await writeStdout(JSON.stringify({ ...shareFields, event: "share_ready", elapsedMs: elapsedMs(), pid: process.pid }));
+        } else if (!flags.verbose) {
+          printBanner(false);
+        }
+        writeVerbose("share_ready", { url: tunnelState.url, fieldCount });
+      } else {
+        const reason = `Worker did not confirm tunnel readiness (GET /api/tunnels/${tunnelState.tunnelId}) within ${READINESS_BUDGET_MS}ms`;
+        if (flags.json) {
+          await writeStdout(JSON.stringify({ ...shareFields, event: "share_pending", reason, elapsedMs: elapsedMs(), pid: process.pid }));
+        } else if (!flags.verbose) {
+          printBanner(true);
+        }
+        writeVerbose("share_pending", { reason });
+      }
+    }
 
     // Lazy relay authorization. The Worker's own relay accounting is the only
     // honest signal that direct P2P did not carry the transfer, so poll it and
