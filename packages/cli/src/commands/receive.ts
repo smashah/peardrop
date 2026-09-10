@@ -304,7 +304,15 @@ export default class ReceiveCommand extends Command {
     // an agent a link that still 404s. Poll here, bounded, instead of leaving
     // every operator to hand-write the same curl loop.
     const readiness = await pollShareReadiness({
-      fetchTunnel: (signal) => fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}`, { signal }),
+      // An unread body would hold its connection open in undici's pool until
+      // GC, up to ~10 times over a full budget — only `.ok` is needed here,
+      // so the body is cancelled immediately after every poll.
+      fetchTunnel: async (signal) => {
+        const res = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}`, { signal });
+        const ok = res.ok;
+        await res.body?.cancel().catch(() => undefined);
+        return { ok };
+      },
       signal: abort.signal,
       sleep,
     });
