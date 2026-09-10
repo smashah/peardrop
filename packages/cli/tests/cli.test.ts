@@ -1,11 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Config } from "@oclif/core";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import ReceiveCommand from "../src/commands/receive.js";
+import ReceiveCommand, { pollShareReadiness } from "../src/commands/receive.js";
 import SendCommand from "../src/commands/send.js";
+
+// receive.ts's own DHT networking is exercised elsewhere; the tests below
+// only need registration/readiness to complete so the safe-stdout and
+// share_ready guarantees can be checked end to end without a live P2P leg.
+vi.mock("@peardrop/core/node", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@peardrop/core/node")>();
+  const Effect = await import("effect/Effect");
+  return {
+    ...actual,
+    runDhtReceiver: (options: Parameters<typeof actual.runDhtReceiver>[0]) =>
+      Effect.promise(async () => {
+        await options.onConnected?.({ transport: "hyperdht", fileCount: 1, totalBytes: 5 });
+        await options.onDelivered?.([{ name: "secret.txt", path: "/tmp/peardrop-test/secret.txt", sha256: "deadbeef" }]);
+      }),
+  };
+});
 
 const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoDir = join(packageDir, "..", "..");
@@ -303,6 +319,87 @@ describe("peardrop CLI", () => {
       await expect(runReceive(["--json"])).rejects.toMatchObject({ oclif: { exit: 1 } });
 
       expect(bodies[0]).not.toHaveProperty("spec");
+    });
+  });
+
+  // peardrop#90: sharing the URL the instant registration returns can hand an
+  // agent a link that still 404s, because the Worker needs a propagation
+  // moment. pollShareReadiness is the bounded internal poll that replaces the
+  // hand-written curl loop this used to require.
+  describe("pollShareReadiness", () => {
+    const instantSleep = async () => undefined;
+
+    it("resolves ready immediately when the first check succeeds", async () => {
+      const fetchTunnel = vi.fn(async () => ({ ok: true }));
+      const result = await pollShareReadiness({ fetchTunnel, signal: new AbortController().signal, sleep: instantSleep });
+      expect(result).toBe("ready");
+      expect(fetchTunnel).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves ready after N failed attempts, with no duplicate resolution", async () => {
+      let attempts = 0;
+      const fetchTunnel = vi.fn(async () => {
+        attempts += 1;
+        return { ok: attempts >= 3 };
+      });
+      const result = await pollShareReadiness({ fetchTunnel, signal: new AbortController().signal, sleep: instantSleep });
+      expect(result).toBe("ready");
+      expect(fetchTunnel).toHaveBeenCalledTimes(3);
+    });
+
+    it("reports pending, not ready, once the bounded budget is exhausted", async () => {
+      const fetchTunnel = vi.fn(async () => ({ ok: false }));
+      const result = await pollShareReadiness({ fetchTunnel, signal: new AbortController().signal, sleep: instantSleep, budgetMs: 0 });
+      expect(result).toBe("pending");
+    });
+  });
+
+  // smashah/peardrop#86: the session event used to spread the whole
+  // TunnelSession, including ownerToken, onto stdout. Runs a full session
+  // (mocked DHT leg, isolated ~/.peardrop) and checks the joined stdout of
+  // every event, not just the first line.
+  describe("receive keeps ownerToken off stdout across a full session (peardrop#86, peardrop#90)", () => {
+    it("emits exactly one share_ready with the registered url, and no line carries ownerToken", async () => {
+      const originalHome = process.env.HOME;
+      const tempHome = mkdtempSync(join(tmpdir(), "peardrop-receive-home-"));
+      const tempTarget = mkdtempSync(join(tmpdir(), "peardrop-receive-target-"));
+      process.env.HOME = tempHome;
+      const chunks = captureStdout();
+      vi.spyOn(globalThis, "fetch").mockImplementation((async (input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (method === "POST" && url.endsWith("/api/tunnels")) {
+          return new Response(
+            JSON.stringify({ slug: "test-drop", url: "https://peardrop.fyi/test-drop", ownerToken: "owner-secret-value", relayAllowed: false }),
+            { status: 200 }
+          );
+        }
+        if (method === "GET" && url.endsWith("/api/tunnels/test-drop")) {
+          return new Response(null, { status: 200 });
+        }
+        if (method === "POST" && url.endsWith("/api/tunnels/test-drop/consumed")) {
+          return new Response(null, { status: 200 });
+        }
+        throw new Error(`Unexpected fetch in test: ${method} ${url}`);
+      }) as typeof fetch);
+
+      try {
+        await runReceive(["--json", "--target", `${tempTarget}/`]);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+        rmSync(tempHome, { recursive: true, force: true });
+        rmSync(tempTarget, { recursive: true, force: true });
+      }
+
+      const events = chunks.join("").split("\n").filter((line) => line.trim().length > 0).map((line) => JSON.parse(line) as Record<string, unknown>);
+      const joined = JSON.stringify(events);
+      expect(joined).not.toContain("owner-secret-value");
+      expect(joined).not.toContain("ownerToken");
+
+      const shareReadyEvents = events.filter((event) => event.event === "share_ready");
+      expect(shareReadyEvents).toHaveLength(1);
+      expect(shareReadyEvents[0]).toMatchObject({ url: "https://peardrop.fyi/test-drop", tunnelId: "test-drop", cancelWith: "peardrop cancel test-drop" });
     });
   });
 });

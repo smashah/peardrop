@@ -545,3 +545,29 @@ describe("[[groups]] and field-direction attributes (peardrop#34)", () => {
     });
   });
 });
+
+// peardrop#90: keeps the shipped worked example from rotting silently —
+// scripts/check-skill-example.mjs guards it staying byte-identical to
+// SKILL.md's inline copy; this guards it staying a valid, decodable spec.
+describe("examples/google-oauth-client.toml (peardrop#90)", () => {
+  it("decodes with the group, entry_url, scope, resource_name, format, and shown_once secret intact", () => {
+    const exampleToml = readFileSync(join(import.meta.dirname, "../../../examples/google-oauth-client.toml"), "utf-8");
+    const spec = parseDropSpecToml(exampleToml);
+
+    expect(spec.groups).toHaveLength(1);
+    expect(spec.groups[0]!.name).toBe("google_oauth_client");
+
+    const clientId = spec.fields.find((field) => field.name === "client_id");
+    expect(clientId?.group).toBe("google_oauth_client");
+    expect(clientId?.entry_url).toBe("https://example.com/auth/google/callback");
+    expect(clientId?.resource_name).toBe("example-project-production");
+    expect(clientId?.scope).toEqual(["openid", "email", "profile"]);
+    expect(clientId?.format).toBe("^[0-9]+-[a-z0-9]+\\.apps\\.googleusercontent\\.com$");
+    expect(new RegExp(clientId!.format!).test("123456789-abc123.apps.googleusercontent.com")).toBe(true);
+
+    const clientSecret = spec.fields.find((field) => field.name === "client_secret");
+    expect(clientSecret?.shown_once).toBe(true);
+    expect(clientSecret?.type).toBe("secret");
+    expect(clientSecret?.masked).toBe(true);
+  });
+});
