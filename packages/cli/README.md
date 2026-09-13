@@ -41,6 +41,7 @@ The private key is stored locally with mode `0600` and is redacted from command 
 
 - `npx --yes @peardrop/cli@latest spec check --spec ./drop.toml` (or inline `--field …` flags) validates the page and prints the fields, labels, links, and delivered filenames it will produce; `--json` for a machine-readable report. A malformed spec fails here before any tunnel is created.
 - `npx --yes @peardrop/cli@latest doctor` checks the installations on PATH, Node version, Worker reachability, wallet state, running receivers, installed skill freshness, and any `--store` sink you pass; `--json` available. `--version` itself is quiet unless a second installation is on PATH.
+- Session files under `~/.peardrop/tunnels` clean themselves up: `receive`, `local`, `status`, and `wait` each delete the sessions whose receiver is gone — expired ones, and finished ones older than a week — so `doctor --prune` is only there when you want the sweep on demand.
 - Something still wrong? File it with the JSON stream and `doctor` output: https://github.com/smashah/peardrop/issues/new?template=drop-problem.yml
 
 ## Check the CLI installation

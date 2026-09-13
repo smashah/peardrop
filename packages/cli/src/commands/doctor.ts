@@ -1,8 +1,7 @@
 import { Command, Flags } from "@oclif/core";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSinkSpec, preflightSink, SinkError, walletPath } from "@peardrop/core/node";
+import { parseSinkSpec, preflightSink, pruneStaleSessions, runEffect, sessionsDir, SinkError, walletPath } from "@peardrop/core/node";
 import { installationDiagnostics } from "../diagnostics/installation.js";
 import { isProcessAlive } from "../detachLog.js";
 import { staleSkillInstalls } from "./agent.js";
@@ -58,29 +57,18 @@ export default class DoctorCommand extends Command {
     const walletConfigured = Boolean(process.env.PEARDROP_WALLET_PRIVATE_KEY) || existsSync(walletPath());
     checks.push({ name: "wallet", ok: true, detail: walletConfigured ? "configured (relay usage above the free tier can be paid)" : "not configured; direct transfers and the free relay tier still work" });
 
-    const tunnels = join(homedir(), ".peardrop", "tunnels");
+    const tunnels = sessionsDir();
+    // The same sweep `receive`, `local`, `status`, and `wait` run: one rule for
+    // what counts as stale, so --prune can never disagree with the automatic pass.
+    const sweep = await runEffect(pruneStaleSessions({ dryRun: !flags.prune })).catch(() => ({ scanned: 0, pruned: 0 }));
     let running = 0;
     let waiting = 0;
-    let prunable = 0;
-    let pruned = 0;
     if (existsSync(tunnels)) {
-      const now = Date.now();
       for (const name of readdirSync(tunnels).filter((n) => n.endsWith(".json"))) {
-        const file = join(tunnels, name);
         try {
-          const session = JSON.parse(readFileSync(file, "utf8")) as { status?: string; pid?: number; expiresAt?: number };
-          const alive = isProcessAlive(session.pid);
+          const session = JSON.parse(readFileSync(join(tunnels, name), "utf8")) as { status?: string; pid?: number };
           if (session.status === "waiting") waiting += 1;
-          if (session.status === "waiting" && alive) running += 1;
-          const expired = typeof session.expiresAt === "number" && session.expiresAt < now;
-          const finishedLongAgo = session.status !== "waiting" && statSync(file).mtimeMs < now - 7 * 24 * 3600 * 1000;
-          if (!alive && (expired || finishedLongAgo)) {
-            prunable += 1;
-            if (flags.prune) {
-              rmSync(file, { force: true });
-              pruned += 1;
-            }
-          }
+          if (session.status === "waiting" && isProcessAlive(session.pid)) running += 1;
         } catch {
           // ignore unreadable sessions
         }
@@ -88,7 +76,7 @@ export default class DoctorCommand extends Command {
       checks.push({
         name: "sessions",
         ok: true,
-        detail: `${tunnels}: ${running} receiver${running === 1 ? "" : "s"} running, ${waiting} session${waiting === 1 ? "" : "s"} waiting, ${prunable} stale${flags.prune ? ` (${pruned} pruned)` : prunable > 0 ? " (doctor --prune removes them)" : ""}`,
+        detail: `${tunnels}: ${running} receiver${running === 1 ? "" : "s"} running, ${waiting} session${waiting === 1 ? "" : "s"} waiting, ${sweep.pruned} stale${flags.prune ? ` (${sweep.pruned} pruned)` : sweep.pruned > 0 ? " (doctor --prune removes them now; receive/local/status/wait prune as they go)" : ""}`,
       });
     } else {
       checks.push({ name: "sessions", ok: true, detail: "no sessions yet" });

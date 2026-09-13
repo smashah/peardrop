@@ -1,3 +1,8 @@
+// Liveness lives in core now, so the session sweeper and the CLI agree on what
+// "the receiver is gone" means; re-exported here because every command that
+// reads a detached log already imports it from this module.
+export { isProcessAlive } from "@peardrop/core/node";
+
 /** Parsing for a detached receiver's log: its --json stdout plus any stderr chatter, one line each. */
 export interface ReceiverEvent {
   readonly event: string;
@@ -35,15 +40,5 @@ export function describeReceiverEvent({ event, data }: ReceiverEvent): string {
     case "teardown": return `teardown: ${String(data.status)}${data.reason ? ` (${String(data.reason)})` : ""}`;
     case "error": return `error: ${String(data.error)}`;
     default: return `${event}`;
-  }
-}
-
-export function isProcessAlive(pid: number | undefined): boolean {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }

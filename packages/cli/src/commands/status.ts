@@ -2,6 +2,7 @@ import { Command, Flags, Args } from "@oclif/core";
 import { loadSession, runEffect } from "@peardrop/core/node";
 import { readFileSync } from "node:fs";
 import { isProcessAlive, parseReceiverEvents } from "../detachLog.js";
+import { pruneSessionsQuietly } from "../pruneSessions.js";
 
 export default class StatusCommand extends Command {
   static override description = "Check status of a PearDrop tunnel";
@@ -18,6 +19,10 @@ export default class StatusCommand extends Command {
   public async run(): Promise<void> {
     const { args, flags } = await this.parse(StatusCommand);
     const workerUrl = flags["worker-url"].replace(/\/$/, "");
+
+    // Cheap, and it keeps the directory honest: asking about one session is a
+    // fine moment to drop the ones whose receivers are never coming back.
+    await pruneSessionsQuietly();
 
     const local = await runEffect(loadSession(args.tunnelId));
 

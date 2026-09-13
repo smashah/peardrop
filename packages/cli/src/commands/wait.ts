@@ -2,6 +2,7 @@ import { Args, Command, Flags } from "@oclif/core";
 import { loadSession, runEffect } from "@peardrop/core/node";
 import { readFileSync } from "node:fs";
 import { describeReceiverEvent, isProcessAlive, parseReceiverEvents, TERMINAL_EVENTS } from "../detachLog.js";
+import { pruneSessionsQuietly } from "../pruneSessions.js";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -19,6 +20,8 @@ export default class WaitCommand extends Command {
 
   public async run(): Promise<void> {
     const { args, flags } = await this.parse(WaitCommand);
+    // A live receiver is never pruned, so this only clears out the dead ones.
+    await pruneSessionsQuietly();
     const session = await runEffect(loadSession(args.tunnelId));
     if (!session) this.error(`No session for ${args.tunnelId}.`, { exit: 1 });
     if (!session.logPath) this.error(`${args.tunnelId} was not started with receive --detach, so there is no event log to follow.`, { exit: 1 });

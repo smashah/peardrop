@@ -23,6 +23,7 @@ import {
 import { DropSpecError, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
 import { loadSpecFromFlags, specFlags } from "../specFlags.js";
 import { skillFreshnessNotice } from "./agent.js";
+import { pruneSessionsQuietly } from "../pruneSessions.js";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
@@ -247,6 +248,10 @@ export default class ReceiveCommand extends Command {
 
     const freshness = await skillFreshnessNotice().catch(() => undefined);
     if (freshness) process.stderr.write(freshness);
+
+    // Before this run registers a session of its own, drop the ones no receiver
+    // is coming back for — otherwise ~/.peardrop/tunnels only ever grows.
+    await pruneSessionsQuietly({ verbose: flags.verbose });
 
     // Malformed/invalid specs fail here, before the Worker is ever asked for a
     // tunnel — the same fail-fast contract `local` gives before it starts a server.
@@ -683,6 +688,13 @@ export default class ReceiveCommand extends Command {
         }
       }
       const status = deliveryConfirmed && receiverCompleted ? "complete" : expired ? "expired" : signalReceived ? "cancelled" : "failed";
+      // Nothing else ever revisits this file, so a receiver that ends without
+      // delivering has to record that here — left at "waiting" it would keep
+      // reading as a live tunnel to `status`, `doctor`, and the sweeper.
+      if (status === "cancelled" || status === "failed") {
+        await runEffect(updateSessionStatus(tunnelState.tunnelId, status))
+          .catch(() => this.warn(`Could not persist ${status} session status; the receiver is still exiting.`));
+      }
       if (flags.json) {
         await writeStdout(JSON.stringify({ mode: "remote", event: "teardown", status, ...(expired ? { reason: "ttl-expired", expiresAt: tunnelState.expiresAt } : {}), elapsedMs: elapsedMs(), pid: process.pid }));
       } else if (expired) {

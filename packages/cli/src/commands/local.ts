@@ -4,6 +4,7 @@ import { runEffect } from "@peardrop/core/node";
 import { DropSpecError, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
 import { loadSpecFromFlags, specFlags } from "../specFlags.js";
 import { skillFreshnessNotice } from "./agent.js";
+import { pruneSessionsQuietly } from "../pruneSessions.js";
 import * as Effect from "effect/Effect";
 import open from "open";
 
@@ -39,6 +40,10 @@ export default class LocalCommand extends Command {
 
     const freshness = await skillFreshnessNotice().catch(() => undefined);
     if (freshness) process.stderr.write(freshness);
+
+    // Same sweep `receive` does: sessions whose receiver is gone are dropped
+    // before this run starts one of its own.
+    await pruneSessionsQuietly();
 
     // Malformed/invalid specs fail here, before any server starts.
     let spec: DropSpec | undefined;
