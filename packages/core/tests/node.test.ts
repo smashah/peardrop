@@ -22,6 +22,19 @@ import { authorizeRelayOverage, RELAY_OVERAGE_WALLET_MESSAGE, WalletError } from
 import { RELAY_AUTHORIZATION_TRIGGER_BYTES, RELAY_FREE_TIER_BYTES } from "../src/payments/RelayBilling.js";
 
 describe("@peardrop/core/node", () => {
+  it("closes an expiring real DHT receiver even while its announcement is pending", async () => {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 50);
+    try {
+      await Effect.runPromiseExit(Effect.scoped(runDhtReceiver({
+        keyPair: createKeyPair(), sink: new DiskSink("/tmp/peardrop-expiry-unused/"), signal: abort.signal,
+      })), { signal: abort.signal });
+      expect(abort.signal.aborted).toBe(true);
+    } finally {
+      clearTimeout(timer);
+    }
+  }, 3_000);
+
   effectIt.effect(
     "delivers headless DHT bytes only after receiver DONE acknowledgement",
     () => Effect.scoped(Effect.gen(function* () {

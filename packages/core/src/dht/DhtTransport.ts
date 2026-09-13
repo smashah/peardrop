@@ -60,18 +60,22 @@ const waitForAbort = (signal?: AbortSignal): Effect.Effect<void, TransportError>
       resume(Effect.void);
       return;
     }
-    signal.addEventListener("abort", () => resume(Effect.void), { once: true });
+    const onAbort = () => resume(Effect.void);
+    signal.addEventListener("abort", onAbort, { once: true });
+    return Effect.sync(() => signal.removeEventListener("abort", onAbort));
   });
 };
 
 export const runDhtReceiver = (options: ReceiverOptions) =>
   Effect.gen(function* () {
     const completed = yield* Deferred.make<void>();
+    const sockets = new Set<Duplex>();
+    let shutdown: Promise<void> | undefined;
     const dht = yield* Effect.acquireRelease(
       Effect.sync(() => new DHT()),
       (node) =>
         Effect.tryPromise({
-          try: () => node.destroy(),
+          try: () => shutdown ??= node.destroy({ force: options.signal?.aborted }),
           catch: () => new TransportError({ message: "DHT shutdown failed" }),
         }).pipe(Effect.orElseSucceed(() => undefined))
     );
@@ -79,6 +83,8 @@ export const runDhtReceiver = (options: ReceiverOptions) =>
     const server = yield* Effect.acquireRelease(
       Effect.sync(() =>
         dht.createServer((socket: Duplex) => {
+          sockets.add(socket);
+          socket.once("close", () => sockets.delete(socket));
           void handleIncomingSocket(
             socket,
             options.sink,
@@ -91,7 +97,17 @@ export const runDhtReceiver = (options: ReceiverOptions) =>
       ),
       (srv) =>
         Effect.tryPromise({
-          try: () => srv.close(),
+          try: async () => {
+            // Direct and relayed peers share this receiver. Closing the listener
+            // alone leaves existing streams alive after cancellation or expiry.
+            for (const socket of sockets) socket.destroy();
+            sockets.clear();
+            // server.close waits for pending listen/announcement work. On TTL
+            // or cancellation, stop the network first so an offline DHT cannot
+            // keep that graceful close pending indefinitely.
+            if (options.signal?.aborted) await (shutdown ??= dht.destroy({ force: true }));
+            return srv.close();
+          },
           catch: () => new TransportError({ message: "DHT server close failed" }),
         }).pipe(Effect.orElseSucceed(() => undefined))
     );

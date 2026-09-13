@@ -222,6 +222,18 @@ beforeEach(() => {
 });
 
 describe("shared Relay sender", () => {
+  it("delivers a free disabled-billing ticket and rejects unknown schemes before opening a socket", async () => {
+    const ticketAdapters = (billingScheme: string) => ({
+      ...adapters,
+      fetch: async () => new Response(JSON.stringify({ ticket: "free-ticket", relayUrl: "wss://relay.test", billingScheme })),
+    });
+    const result = await Effect.runPromise(Effect.scoped(sendRelay({ descriptor, files: [file] }, ticketAdapters("disabled"))));
+    expect(result.files).toEqual(deliveredFiles);
+    const opened = sockets.length;
+    await expect(Effect.runPromise(Effect.scoped(sendRelay({ descriptor, files: [file] }, ticketAdapters("unknown"))))).rejects.toMatchObject({ phase: "ticket-request" });
+    expect(sockets).toHaveLength(opened);
+  });
+
   it("uses non-custodial Relay PDWP and emits monotonic lifecycle phases", async () => {
     const events: Array<{ phase: string; elapsedMs: number; attempt: number; mode: string }> = [];
     const result = await Effect.runPromise(Effect.scoped(sendRelay({
