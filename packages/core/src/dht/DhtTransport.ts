@@ -68,7 +68,7 @@ const waitForAbort = (signal?: AbortSignal): Effect.Effect<void, TransportError>
 
 export const runDhtReceiver = (options: ReceiverOptions) =>
   Effect.gen(function* () {
-    const completed = yield* Deferred.make<void>();
+    const completed = yield* Deferred.make<void, TransportError>();
     const sockets = new Set<Duplex>();
     let shutdown: Promise<void> | undefined;
     const dht = yield* Effect.acquireRelease(
@@ -90,7 +90,7 @@ export const runDhtReceiver = (options: ReceiverOptions) =>
             options.sink,
             options.onConnected,
             options.onDelivered,
-            () => Effect.runFork(Deferred.succeed(completed, undefined)),
+            (error) => Effect.runFork(error ? Deferred.fail(completed, error) : Deferred.succeed(completed, undefined)),
             options
           );
         })
@@ -98,14 +98,14 @@ export const runDhtReceiver = (options: ReceiverOptions) =>
       (srv) =>
         Effect.tryPromise({
           try: async () => {
-            // Direct and relayed peers share this receiver. Closing the listener
-            // alone leaves existing streams alive after cancellation or expiry.
-            for (const socket of sockets) socket.destroy();
-            sockets.clear();
             // server.close waits for pending listen/announcement work. On TTL
             // or cancellation, stop the network first so an offline DHT cannot
             // keep that graceful close pending indefinitely.
-            if (options.signal?.aborted) await (shutdown ??= dht.destroy({ force: true }));
+            if (options.signal?.aborted) {
+              for (const socket of sockets) socket.destroy();
+              await (shutdown ??= dht.destroy({ force: true }));
+            }
+            sockets.clear();
             return srv.close();
           },
           catch: () => new TransportError({ message: "DHT server close failed" }),
@@ -126,7 +126,7 @@ function handleIncomingSocket(
   sink: BridgeSink,
   onConnected?: (details: DhtConnectionDetails) => void | Promise<void>,
   onDelivered?: (files: ReadonlyArray<unknown>) => Promise<void>,
-  onCompleted?: () => void,
+  onCompleted?: (error?: TransportError) => void,
   options: Pick<ReceiverOptions, "pin" | "maxFiles" | "maxBytes"> = {}
 ): void {
   const parser = new PdwpFrameParser();
@@ -178,7 +178,23 @@ function handleIncomingSocket(
           if (nextFileIndex === manifest.files.length) {
             const files = yield* callSink(() => sink.onDone());
             if (onDelivered) yield* callSink(() => onDelivered(files));
-            yield* writeFrame(socket, PdwpCodec.encodeJsonFrame(FrameType.DONE, { ok: true, files }));
+            // NoiseSecretStream.end's callback only queues rawStream.end; it
+            // does not wait for UDX acknowledgement. Releasing the DHT there can
+            // reset a relay peer while its DONE frame is still in flight.
+            const flushed = yield* writeFrame(socket, PdwpCodec.encodeJsonFrame(FrameType.DONE, { ok: true, files })).pipe(
+              Effect.andThen(Effect.tryPromise({
+                try: () => (socket as Duplex & { flush(): Promise<boolean> }).flush(),
+                catch: (cause) => new TransportError({ message: `DHT DONE flush failed: ${String(cause)}` }),
+              })),
+              Effect.timeout("30 seconds"),
+              Effect.catch((cause) => Effect.succeed(new TransportError({ message: `DHT DONE acknowledgement failed: ${String(cause)}` })))
+            );
+            if (flushed !== true) {
+              onCompleted?.(flushed === false
+                ? new TransportError({ message: "DHT connection closed before DONE was acknowledged" })
+                : flushed);
+              return;
+            }
             socket.end(() => onCompleted?.());
           }
         } else if (frame.type === FrameType.DONE) {
@@ -222,12 +238,17 @@ const writeFrame = (socket: Duplex, frame: Buffer) =>
     const cleanup = () => { socket.removeListener("drain", onDrain); socket.removeListener("error", onError); };
     const onDrain = () => { cleanup(); resume(Effect.void); };
     const onError = (cause: unknown) => { cleanup(); resume(Effect.fail(new TransportError({ message: String(cause) }))); };
-    if (socket.write(frame)) {
-      resume(Effect.void);
-      return;
+    try {
+      if (socket.write(frame)) {
+        resume(Effect.void);
+        return;
+      }
+      socket.once("drain", onDrain);
+      socket.once("error", onError);
+      return Effect.sync(cleanup);
+    } catch (cause) {
+      onError(cause);
     }
-    socket.once("drain", onDrain);
-    socket.once("error", onError);
   });
 
 const decodeManifest = (payload: unknown) => {

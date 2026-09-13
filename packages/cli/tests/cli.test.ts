@@ -401,15 +401,20 @@ describe("peardrop CLI", () => {
   // (mocked DHT leg, isolated ~/.peardrop) and checks the joined stdout of
   // every event, not just the first line.
   describe("receive keeps ownerToken off stdout across a full session (peardrop#86, peardrop#90)", () => {
-    it.each(["delivered", "never-connected", "direct-connected", "relay-connected", "readiness-stalled", "cancelled"])("emits safe readiness and one terminal event for %s", async (state) => {
+    it.each(["delivered", "ack-failed", "never-connected", "direct-connected", "relay-connected", "readiness-stalled", "cancelled"])("emits safe readiness and one terminal event for %s", async (state) => {
       const originalHome = process.env.HOME;
       const tempHome = mkdtempSync(join(tmpdir(), "peardrop-receive-home-"));
       const tempTarget = mkdtempSync(join(tmpdir(), "peardrop-receive-target-"));
       process.env.HOME = tempHome;
       const chunks = captureStdout();
       let expiresAt = Infinity;
-      const expiring = state !== "delivered" && state !== "cancelled";
-      if (state !== "delivered") {
+      const expiring = state !== "delivered" && state !== "cancelled" && state !== "ack-failed";
+      if (state === "ack-failed") {
+        const deliver = vi.mocked(runDhtReceiver).getMockImplementation()!;
+        vi.mocked(runDhtReceiver).mockImplementationOnce((options) => deliver(options).pipe(
+          Effect.andThen(Effect.fail(new Error("DHT DONE acknowledgement failed")))
+        ));
+      } else if (state !== "delivered") {
         vi.mocked(runDhtReceiver).mockImplementationOnce((options) => Effect.promise(async () => {
           if (state.endsWith("connected") && state !== "never-connected") {
             await options.onConnected?.({ transport: "hyperdht", fileCount: 1, totalBytes: 5 });
@@ -444,7 +449,7 @@ describe("peardrop CLI", () => {
 
       try {
         const result = await runReceive(["--json", "--ttl", "1s", "--target", `${tempTarget}/`]).then(() => undefined, (error: unknown) => error);
-        if (state === "cancelled") expect(result).toBeDefined();
+        if (state === "cancelled" || state === "ack-failed") expect(result).toBeDefined();
         else expect(result).toBeUndefined();
         if (expiring) {
           expect(Date.now() - expiresAt).toBeLessThan(1_000);
@@ -467,9 +472,10 @@ describe("peardrop CLI", () => {
       expect(shareReadyEvents).toHaveLength(state === "readiness-stalled" ? 0 : 1);
       if (shareReadyEvents[0]) expect(shareReadyEvents[0]).toMatchObject({ url: "https://peardrop.fyi/test-drop", tunnelId: "test-drop", cancelWith: "peardrop cancel test-drop" });
       expect(events.filter((event) => event.event === "teardown")).toEqual([expect.objectContaining({
-        status: expiring ? "expired" : state === "delivered" ? "complete" : "cancelled",
+        status: expiring ? "expired" : state === "delivered" ? "complete" : state === "ack-failed" ? "failed" : "cancelled",
         ...(expiring ? { reason: "ttl-expired", expiresAt: expect.any(Number) } : {}),
       })]);
+      if (state === "ack-failed") expect(events.some((event) => event.event === "delivered")).toBe(true);
       expect(events.filter((event) => event.event === "error")).toHaveLength(0);
     });
   });
