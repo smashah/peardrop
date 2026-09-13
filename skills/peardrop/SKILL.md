@@ -5,15 +5,15 @@ description: Use PearDrop to receive or send secrets, API keys, credentials, cer
 
 # PearDrop
 
-Always use the published CLI:
+Use a current CLI. If `peardrop --version` on PATH prints a version at least as new as the one named at the top of this document, use that bare `peardrop` for every command: it is local code your harness will not block. Otherwise use the published package explicitly:
 
 ```bash
 npx --yes @peardrop/cli@latest --version
 ```
 
-Never substitute a remembered global binary, an unscoped npx package name, a private collector, or an MCP the user did not choose.
+Never use an older `peardrop` than that, an unscoped npx package name, a private collector, or an MCP the user did not choose. Harness permission classifiers (Claude Code auto mode among them) often deny `npx` of an external package; a current global install is the reliable path, so when npx is refused ask the human to run `npm install -g @peardrop/cli@latest` once and continue with the bare binary.
 
-If your harness refuses to run npx (a permission classifier, an offline sandbox), check the bare binary with `peardrop --version` and use it only when its version is at least the one named at the top of this document; an older `peardrop` lacks `--detach`, `--store`, `hook test`, and `spec check`, and its bundled copy of this skill is stale. Ask the human to run `npm install -g @peardrop/cli@latest` rather than continuing with an old CLI. `npx --yes @peardrop/cli@latest agent` prints this skill and its references in full. Run `npx --yes @peardrop/cli@latest agent --install` once per machine so the skill loads with your harness next time instead of being fetched; `agent --update` refreshes it after a CLI release.
+`npx --yes @peardrop/cli@latest agent` prints this skill and its references in full. Run `npx --yes @peardrop/cli@latest agent --install` once per machine so the skill loads with your harness next time instead of being fetched; `agent --update` refreshes it after a CLI release.
 
 ## Create a drop
 
