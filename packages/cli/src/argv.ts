@@ -7,4 +7,4 @@ export function normalizeCliArgv(argv: ReadonlyArray<string>): string[] {
   return ["send", first, "--text", payload, ...rest];
 }
 
-const EXPLICIT_COMMANDS = new Set(["agent", "cancel", "help", "local", "receive", "send", "status", "test", "test:nc", "wallet"]);
+const EXPLICIT_COMMANDS = new Set(["agent", "cancel", "help", "local", "receive", "send", "status", "test", "test:nc", "wait", "wallet"]);

@@ -23,6 +23,10 @@ export interface TunnelSession {
   readonly pin?: string;
   readonly files?: ReadonlyArray<{ name: string; path: string; sha256: string }>;
   readonly relayBytesBilled?: number;
+  /** Receiver process id, so status/cancel can see whether it is still alive. */
+  readonly pid?: number;
+  /** Where a detached receiver appends its --json event stream. */
+  readonly logPath?: string;
 }
 
 const TunnelSessionSchema = Schema.Struct({
@@ -41,6 +45,8 @@ const TunnelSessionSchema = Schema.Struct({
     Schema.Array(Schema.Struct({ name: Schema.String, path: Schema.String, sha256: Schema.String }))
   ),
   relayBytesBilled: Schema.optional(Schema.Number),
+  pid: Schema.optional(Schema.Number),
+  logPath: Schema.optional(Schema.String),
 });
 
 const baseDir = () => join(homedir(), ".peardrop", "tunnels");

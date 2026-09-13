@@ -1,6 +1,7 @@
 import { Command, Args, Flags } from "@oclif/core";
 import { loadSession, updateSessionStatus, removeSession, runEffect } from "@peardrop/core/node";
 import * as Effect from "effect/Effect";
+import { isProcessAlive } from "../detachLog.js";
 
 export default class CancelCommand extends Command {
   static override description = "Cancel an active PearDrop tunnel";
@@ -34,6 +35,16 @@ export default class CancelCommand extends Command {
         return yield* removeSession(args.tunnelId);
       })
     );
+
+    if (session?.pid && isProcessAlive(session.pid)) {
+      // A detached receiver tears itself down on SIGTERM (Worker DELETE, session status, teardown event).
+      try {
+        process.kill(session.pid, "SIGTERM");
+        this.log(`Stopped background receiver (pid ${session.pid}).`);
+      } catch (error) {
+        this.warn(`Could not stop receiver pid ${session.pid}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
 
     if (removed) {
       this.log(`Tunnel ${args.tunnelId} cancelled.`);

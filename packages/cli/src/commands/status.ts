@@ -1,5 +1,7 @@
 import { Command, Flags, Args } from "@oclif/core";
 import { loadSession, runEffect } from "@peardrop/core/node";
+import { readFileSync } from "node:fs";
+import { isProcessAlive, parseReceiverEvents } from "../detachLog.js";
 
 export default class StatusCommand extends Command {
   static override description = "Check status of a PearDrop tunnel";
@@ -27,6 +29,15 @@ export default class StatusCommand extends Command {
     }
 
     const status = remote?.status || local?.status || "unknown";
+    const running = isProcessAlive(local?.pid);
+    let lastEvent: string | undefined;
+    if (local?.logPath) {
+      try {
+        lastEvent = parseReceiverEvents(readFileSync(local.logPath, "utf8")).at(-1)?.event;
+      } catch {
+        // no log yet
+      }
+    }
     const output = {
       tunnelId: args.tunnelId,
       status,
@@ -37,12 +48,13 @@ export default class StatusCommand extends Command {
       local: local ? { ...local, ownerToken: undefined } : null,
       remoteReachable: remote !== null,
       consumed: remote === null && local === null,
+      receiver: { pid: local?.pid, running, lastEvent, logPath: local?.logPath },
     };
 
     if (flags.json) {
       this.log(JSON.stringify(output, null, 2));
     } else if (local) {
-      this.log(`Tunnel ${args.tunnelId}: ${status} (Target: ${local.target})`);
+      this.log(`Tunnel ${args.tunnelId}: ${status} (Target: ${local.target})${local.pid ? ` receiver pid ${local.pid} ${running ? "running" : "not running"}` : ""}${lastEvent ? ` last event ${lastEvent}` : ""}`);
     } else if (remote) {
       this.log(`Tunnel ${args.tunnelId}: active on worker`);
     } else {

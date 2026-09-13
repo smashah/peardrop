@@ -14,6 +14,7 @@ describe("default send invocation", () => {
   it("leaves explicit commands unchanged", () => {
     expect(normalizeCliArgv(["receive", "--json"])).toEqual(["receive", "--json"]);
     expect(normalizeCliArgv(["agent", "--install"])).toEqual(["agent", "--install"]);
+    expect(normalizeCliArgv(["wait", "silent-moss-7f2"])).toEqual(["wait", "silent-moss-7f2"]);
     expect(normalizeCliArgv(["send", "early-kayak-fvz", "--text", "hello"])).toEqual([
       "send",
       "early-kayak-fvz",

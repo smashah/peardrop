@@ -45,6 +45,8 @@ export interface RunOnReceiveHookOptions {
   readonly targetPath: string;
   readonly files: ReadonlyArray<OnReceiveHookFile>;
   readonly env?: NodeJS.ProcessEnv;
+  /** Working directory for the hook; defaults to this process's cwd so relative paths in the command resolve where the operator ran the CLI (#85). */
+  readonly cwd?: string;
   /** Sink for hook output and the failure notice; defaults to this process's stderr. */
   readonly log?: (chunk: string) => void;
 }
@@ -83,6 +85,7 @@ export function runOnReceiveHook(options: RunOnReceiveHookOptions): Promise<OnRe
     try {
       child = spawn(options.command, {
         shell: true,
+        cwd: options.cwd ?? process.cwd(),
         // stdout is piped rather than inherited so hook chatter can never interleave
         // with the CLI's own --json line on stdout.
         stdio: ["ignore", "pipe", "pipe"],

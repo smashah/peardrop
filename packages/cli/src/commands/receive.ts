@@ -18,6 +18,11 @@ import {
 import { DropSpecError, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
 import { loadSpecFromFlags, specFlags } from "../specFlags.js";
 import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
+import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { describeReceiverEvent, parseReceiverEvents, SHARE_EVENTS, TERMINAL_EVENTS } from "../detachLog.js";
 import { performance } from "node:perf_hooks";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -146,9 +151,9 @@ export default class ReceiveCommand extends Command {
     json: Flags.boolean({ description: "Output JSON metadata" }),
     verbose: Flags.boolean({ char: "v", description: "Write phase diagnostics to stderr" }),
     name: Flags.string({ description: "Optional tunnel label" }),
-    // Hidden, not removed: #88's accepted resolution is to stop advertising
-    // background supervision this CLI doesn't implement, not to implement it.
-    detach: Flags.boolean({ description: "Run receiver in background", hidden: true }),
+    detach: Flags.boolean({
+      description: "Leave the receiver running in the background: prints session and share_ready, then returns. Follow it with `wait <slug>` or `status <slug>`; log in ~/.peardrop/logs",
+    }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
     ...specFlags,
     "on-receive": Flags.string({ description: "Command to run after a successful drop (overrides [hooks] on_receive)" }),
@@ -164,6 +169,58 @@ export default class ReceiveCommand extends Command {
     if (!json) this.error(message, { exit: 1 });
     await writeStdout(JSON.stringify({ mode: "remote", event: "error", error: message }));
     return this.exit(1);
+  }
+
+  /**
+   * Background mode (#88, #112): re-run this exact command as a reparented child
+   * whose stdout/stderr append to a 0600 log under ~/.peardrop/logs, forward its
+   * events here until it reports share_ready/share_pending, then return. The
+   * child records its pid and log path in the session file, which is what
+   * `wait`, `status`, and `cancel` use afterwards. Spec and flag validation
+   * already happened above, so a bad request fails here, not silently in the log.
+   */
+  private async runDetached(json: boolean): Promise<void> {
+    const logDir = join(homedir(), ".peardrop", "logs");
+    mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    const logPath = join(logDir, `${Date.now()}-${randomBytes(4).toString("hex")}.log`);
+    const fd = openSync(logPath, "a", 0o600);
+    const argv = process.argv.slice(2).filter((arg) => !arg.startsWith("--detach"));
+    if (!argv.includes("--json")) argv.push("--json");
+    const child = spawn(process.execPath, [process.argv[1]!, ...argv], {
+      detached: true,
+      stdio: ["ignore", fd, fd],
+      env: { ...process.env, PEARDROP_DETACHED_LOG: logPath },
+    });
+    closeSync(fd);
+    child.unref();
+    let exited = false;
+    child.once("exit", () => { exited = true; });
+    const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 100));
+
+    const deadline = Date.now() + READINESS_BUDGET_MS + 20_000;
+    let seen = 0;
+    while (Date.now() < deadline) {
+      let events: ReturnType<typeof parseReceiverEvents> = [];
+      try {
+        events = parseReceiverEvents(readFileSync(logPath, "utf8"));
+      } catch {
+        // not written yet
+      }
+      for (const event of events.slice(seen)) {
+        if (json) await writeStdout(JSON.stringify({ ...event.data, detached: true, logPath }));
+        else this.log(describeReceiverEvent(event));
+        if (SHARE_EVENTS.has(event.event)) {
+          const slug = String(event.data.tunnelId ?? "");
+          if (!json) this.log(`Receiver running in the background (pid ${child.pid}). Follow it: peardrop wait ${slug}   Stop it: peardrop cancel ${slug}   Log: ${logPath}`);
+          return;
+        }
+        if (TERMINAL_EVENTS.has(event.event)) return this.exit(1);
+      }
+      seen = events.length;
+      if (exited) break;
+      await pause();
+    }
+    return this.fail(`Detached receiver did not report readiness in time (pid ${child.pid ?? "?"}, log ${logPath}).`, json);
   }
 
   public async run(): Promise<void> {
@@ -227,12 +284,7 @@ export default class ReceiveCommand extends Command {
     // reports relayed bytes trending over that threshold.
     const allowRelay = flags["allow-relay"] ?? flags.relay;
 
-    if (flags.detach) {
-      return this.fail(
-        "--detach is unavailable — supervised receiver persistence is not implemented; run receive in the foreground, in its own long-lived pane, per the foreground-supervision recipe in skills/peardrop/SKILL.md.",
-        flags.json
-      );
-    }
+    if (flags.detach) return this.runDetached(flags.json);
 
     let tunnelRes: {
       slug: string;
@@ -281,6 +333,8 @@ export default class ReceiveCommand extends Command {
       workerUrl,
       mode: "remote",
       status: "waiting",
+      pid: process.pid,
+      ...(process.env.PEARDROP_DETACHED_LOG ? { logPath: process.env.PEARDROP_DETACHED_LOG } : {}),
     };
 
     await runEffect(saveSession(tunnelState));

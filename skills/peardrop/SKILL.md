@@ -25,10 +25,10 @@ This is the only path. Target: a shared URL within 90 seconds of a complete requ
    ```
 
 3. **Describe the page.** For a routine drop use inline flags and no file at all (example below). Use a TOML spec (`--spec ./drop.toml`) when the page is reusable or elaborate: several grouped fields, provider scopes, a hook with configuration. `--print-spec` turns any inline drop into that TOML. For multi-field or hooked specs read [references/config-and-handoff.md](references/config-and-handoff.md) first. Preserve the request literally: do not invent fields, do not drop optional ones, and never put a secret value in the spec.
-4. **Start the receiver and keep it alive until a terminal event.** In an agent harness run it as a background task whose stdout you can read back; a human runs it in a terminal.
+4. **Start the receiver detached.** `--detach` registers the tunnel, prints `session` and `share_ready` (or `share_pending`), then returns while the receiver keeps running in the background; its full event stream is in the log named in the output. Do not block your session on the receiver. A human who wants to watch it live can omit `--detach`.
 
    ```bash
-   npx --yes @peardrop/cli@latest receive --target ./peardrop-inbox/ --ttl 15m --json \
+   npx --yes @peardrop/cli@latest receive --detach --json --target ./peardrop-inbox/ --ttl 15m \
      --title "Share one API token" \
      --request "Create a token for the requested project and permissions only, copy it, paste it below, and select Send." \
      --field api_token:token:"API token" \
@@ -36,10 +36,11 @@ This is the only path. Target: a shared URL within 90 seconds of a complete requ
      --field-shown-once api_token
    ```
 
-   With a TOML spec instead: `npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-inbox/ --ttl 15m --json`.
+   With a TOML spec instead: `npx --yes @peardrop/cli@latest receive --detach --json --spec ./drop.toml --target ./peardrop-inbox/ --ttl 15m`.
 
 5. **Wait for `share_ready`**, then share its `url` and `fingerprint` immediately. `session` is not readiness. `share_pending` means the Worker has not confirmed yet: keep waiting, or check `npx --yes @peardrop/cli@latest status <slug>`.
 6. **Give a short receipt**: CLI version, mode, target, TTL, PIN state, field count, URL, fingerprint, and what happens after receipt.
+7. **Follow up later** with `npx --yes @peardrop/cli@latest wait <slug>` (blocks until delivered, expired, or failed and prints the events; `--timeout 30s` to poll) or `status <slug>`; `cancel <slug>` stops the background receiver and tears the page down.
 
 Do not scan the Keychain, a vault, or the environment for existing values before creating a drop; it is never needed and harness classifiers block it. Ledgers, persistence, and issue filing happen after the URL is shared, never on the way to it.
 
@@ -76,7 +77,7 @@ npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-in
 
 ## Events
 
-Hosted `receive --json` emits `session`, then `share_ready` or `share_pending`, then `connected`, `delivered`, and a terminal `teardown` or `error`. TTL expiry is `teardown` with `status: "expired"` and exit code 0. `local --json` emits `listening` and `closed` (including the hook result). Every event is a compact JSON line on stdout; human diagnostics go to stderr. No event carries owner authority, so the stream is safe to log in full. `session`, `share_ready`, and `share_pending` include `cancelWith`, the exact command that cancels the drop.
+Hosted `receive --json` emits `session`, then `share_ready` or `share_pending`, then `connected`, `delivered`, and a terminal `teardown` or `error`. With `--detach` the first two reach your stdout and the rest go to the log (`wait <slug>` replays them). TTL expiry is `teardown` with `status: "expired"` and exit code 0. `local --json` emits `listening` and `closed` (including the hook result). Every event is a compact JSON line on stdout; human diagnostics go to stderr. No event carries owner authority, so the stream is safe to log in full. `session`, `share_ready`, and `share_pending` include `cancelWith`, the exact command that cancels the drop.
 
 A page view, ticket, socket close, attempted send, or sender-side final frame is never delivery; only authenticated receiver acknowledgement completes and consumes the drop. On cancellation, failure, expiry, or a signal the receiver tears the public session down.
 

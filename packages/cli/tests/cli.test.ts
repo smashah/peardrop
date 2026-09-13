@@ -214,13 +214,13 @@ describe("peardrop CLI", () => {
       expect(reported.error).toContain("Worker tunnel registration failed");
     });
 
-    it("reports an unusable flag combination as JSON rather than human prose", async () => {
+    it("validates the request as JSON before detaching, so a bad spec never reaches the background log", async () => {
       const chunks = captureStdout();
-      await expect(runReceive(["--json", "--detach"])).rejects.toMatchObject({ oclif: { exit: 1 } });
+      await expect(runReceive(["--json", "--detach", "--field", "a:password"])).rejects.toMatchObject({ oclif: { exit: 1 } });
 
       const reported = JSON.parse(chunks.join("").trim()) as { event: string; error: string };
       expect(reported.event).toBe("error");
-      expect(reported.error).toContain("--detach is unavailable");
+      expect(reported.error).toContain("type must be text, secret, token, or file");
     });
   });
 

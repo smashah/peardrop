@@ -93,7 +93,7 @@ TOML
 npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-inbox/ --ttl 15m --json
 ```
 
-Run the receiver in a terminal, or as a background task whose stdout you can read back. Wait for `share_ready`, then immediately share that event's URL and fingerprint; `session` alone is not readiness, and `share_pending` means keep waiting. `share_ready` is the proof the page works: no browser check, disposable transfer, or wrapper script is needed. Keep the receiver running until delivery, expiry, or cancellation.
+Add `--detach` to get your shell back: the CLI prints `session` and `share_ready` (or `share_pending`) and leaves the receiver running in the background with its event stream appended to a 0600 log under `~/.peardrop/logs`. `peardrop wait <slug>` follows it to the terminal event, `peardrop status <slug>` reports the receiver pid and last event, and `peardrop cancel <slug>` stops it and tears the page down. Without `--detach` the receiver runs in the foreground until delivery, expiry, or cancellation. Either way, wait for `share_ready` before sharing the URL and fingerprint; `session` alone is not readiness. `share_ready` is the proof the page works: no browser check, disposable transfer, or wrapper script is needed.
 
 ### Same-machine local example
 
