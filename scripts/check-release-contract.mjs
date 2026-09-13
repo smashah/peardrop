@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 
-const workflow = await readFile(resolve(import.meta.dirname, "../.github/workflows/release.yml"), "utf8");
+const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
 const requiredSteps = [
   "docker push \"$image:$version\"",
   "bumpy ci release --expect-mode publish",

@@ -1,7 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(import.meta.dirname, "..");
+const root = fileURLToPath(new URL("../", import.meta.url));
 const allowedFiles = new Set([
   ".dockerignore",
   ".gitignore",
@@ -11,6 +12,7 @@ const allowedFiles = new Set([
   "LICENSE",
   "README.md",
   "docs/RELEASING.md",
+  "examples/api-token.toml",
   "examples/google-oauth-client.toml",
   "fly.toml",
   "infra/relay/Dockerfile",

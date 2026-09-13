@@ -11,6 +11,8 @@ Use the published CLI explicitly for every operator command:
 npx --yes @peardrop/cli@latest --version
 ```
 
+`--version` also identifies the invoked executable and other PATH installations on stderr. If a bare command rejects a documented flag, use the explicit current invocation above and correct the stale installation or PATH separately. No installation probes run on the receiver path.
+
 Never substitute a remembered global binary, `npx peardrop`, a private collector, or a newly enabled MCP. Use an already-approved PearDrop MCP only when the user explicitly chose that surface; otherwise use the CLI.
 
 ## Choose the mode before creating the drop
@@ -49,7 +51,7 @@ Acceptance has two tiers. Pick the tier before you start the receiver, not after
 
 ### Tier 1 — routine credential inbox
 
-Applies when the CLI version and page schema are already qualified and only the declarative content (title, fields, links, copy) varies — the normal case for an ordinary credential or secret inbox. **Tier 1 does not require a disposable transfer.** Target: under 90 seconds from a complete request to a shared URL.
+Applies when the CLI version and page schema are already qualified and only the declarative content (title, fields, links, copy) varies — the normal case for an ordinary credential or secret inbox. **Tier 1 does not require an automated browser check, disposable transfer, package-source inspection, or bespoke wrapper.** Target: under 90 seconds from a complete request to a shared URL.
 
 1. Create the target directory and restrict it before starting the receiver. Multi-field targets end in `/`:
 
@@ -80,6 +82,39 @@ Complete the full handoff receipt in [references/config-and-handoff.md](referenc
 ### Foreground-supervision recipe
 
 `--detach` is unavailable — background receiver supervision is not implemented (#88). One canonical pattern instead: the receiver owns a dedicated pane for its own lifetime; the agent reads its stdout from that pane; cleanup is `peardrop cancel <slug>` or Ctrl-C, both of which tear the Worker record down. Never background the receiver with `&` or `nohup` and lose its stdout — that is exactly the supervision `--detach` refuses to fake.
+
+### Worked example: one API token
+
+Start with this minimal hosted spec when the request is one token with setup instructions. Replace the example console URL and the project/permission wording with the actual request; do not put the token into the spec. The heredoc is byte-identical to [examples/api-token.toml](https://github.com/smashah/peardrop/blob/main/examples/api-token.toml), and `scripts/check-skill-example.mjs` checks it against both this skill and the CLI README.
+
+```bash
+umask 077
+mkdir -p ./peardrop-inbox/
+chmod 700 ./peardrop-inbox/
+cat > ./drop.toml <<'TOML'
+title = "Share one API token"
+description = "Create a token for the requested project and permissions only."
+
+[copy]
+request = """
+1. Open the provider console using the button below.
+2. Select the requested project and create a token with only the requested permissions.
+3. Copy the token, paste it below, and select Send.
+"""
+
+[[fields]]
+name = "api_token"
+type = "token"
+label = "API token"
+description = "Paste the token from the provider console. Never put it in chat."
+link = { label = "Open the provider console", url = "https://console.example.com/api-tokens" }
+required = true
+masked = true
+TOML
+npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-inbox/ --ttl 15m --json
+```
+
+Run that command in the foreground, wait for `share_ready`, and share its URL and fingerprint immediately. Keep the session alive until it reports a terminal result. The numbered setup instructions and provider-console button are part of the spec, so no private helper or browser ceremony is needed for this qualified shape.
 
 ### Worked example: grouped provider OAuth credential
 

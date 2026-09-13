@@ -3,9 +3,9 @@ import { spawnSync } from "node:child_process";
 import { extname, relative, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const root = resolve(import.meta.dirname, "..");
+const root = fileURLToPath(new URL("../", import.meta.url));
 const artifacts = resolve(root, ".artifacts");
 await rm(artifacts, { force: true, recursive: true });
 await mkdir(artifacts, { recursive: true });

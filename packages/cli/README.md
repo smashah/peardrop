@@ -26,7 +26,7 @@ The forced Relay sender uses the same state machine as the hosted web sender: no
 
 `npx --yes @peardrop/cli@latest test nc` is the production non-custodial diagnostic. It invokes the exact shared web-sender boundary (`sendRelay` from `@peardrop/core/relay`) that the hosted browser drop page, forced `send --relay`, and the relay e2e harness all use — not a CLI subprocess approximation of it. It creates a disposable receiver, forces non-custodial Relay with custodial fallback disabled, verifies byte-for-byte delivery and clean receiver exit, confirms the tunnel was consumed, and deletes its temporary data. After any failure, timeout, SIGINT, or SIGTERM, it awaits bounded sender teardown and then watches the receiver for a documented 2-second terminal-consistency window: if the receiver delivers bytes the sender can no longer see — the invisible-live-attempt-after-failure condition — the diagnostic turns red at `late-delivery` rather than reporting success from eventual byte delivery. Events are labeled `receiver`, `web-sender`, `relay`, or `harness`. Its default timeout is 30 seconds; override it with a bounded duration such as `--timeout 1m`, and add `--json` for stable machine-readable events and the final summary.
 
-`--json` prints one compact JSON line per event on stdout: the session (with the drop URL and relay fallback permission), the accepted connection's actual transport details, and the delivered file metadata. A startup failure emits `{"mode":"remote","event":"error","error":"…"}` and exits non-zero. Every line is flushed as it is written, and a successful one-time receiver exits after its delivery acknowledgement is flushed. Direct CLI sends also report descriptor lookup, payload preparation, DHT connection, transfer, and total timings so network discovery time is visible instead of being folded into one delivery duration.
+`--json` prints one compact JSON line per event on stdout: the session (with the drop URL and relay fallback permission), hosted readiness (`share_ready` or `share_pending`), the accepted connection's actual transport details, and the delivered file metadata. Share the hosted URL only after `share_ready`. A startup failure emits `{"mode":"remote","event":"error","error":"…"}` and exits non-zero. Every line is flushed as it is written, and a successful one-time receiver exits after its delivery acknowledgement is flushed. Direct CLI sends also report descriptor lookup, payload preparation, DHT connection, transfer, and total timings so network discovery time is visible instead of being folded into one delivery duration.
 
 To pay for relay usage above the free tier, configure a local Base wallet:
 
@@ -37,7 +37,50 @@ npx --yes @peardrop/cli@latest wallet status
 
 The private key is stored locally with mode `0600` and is redacted from command output. When production facilitator discovery does not report compatible Base mainnet support, PearDrop stays direct-only.
 
+## Check the CLI installation
+
+Use `npx --yes @peardrop/cli@latest` for current commands instead of relying on a global `peardrop` from an unknown PATH entry. Run `npx --yes @peardrop/cli@latest --version` to print the active version; stderr identifies the invoked executable and any other PearDrop installations found on PATH, including which one a bare `peardrop` would select. Diagnostics read package metadata and never execute another installation.
+
+If a documented flag is missing, compare `command -v peardrop` and `peardrop --version` with the explicit current invocation above. An old binary cannot gain this diagnostic until it is updated. Remove the obsolete installation through the package manager that installed it, or put the intended installation first on PATH, then clear your shell's command cache with `hash -r`. Until then, keep using the explicit `npx --yes @peardrop/cli@latest` invocation.
+
 ## TOML drop-page specs
+
+Agents should read the [canonical PearDrop skill](https://github.com/smashah/peardrop/blob/main/skills/peardrop/SKILL.md) before creating a drop. Both hosted `receive` and same-machine `local` accept `--spec <file.toml>` or `--spec-inline '<toml>'` for titles, instructions, links, named fields, and validation. The hosted workflow below needs only ordinary shell commands and the CLI's readiness output.
+
+### Hosted example: one API token
+
+Use [examples/api-token.toml](https://github.com/smashah/peardrop/blob/main/examples/api-token.toml), replacing the example console URL and requested project/permissions with the actual request. It has a page title, numbered instructions, a console button, and one required masked token. It contains no credential value.
+
+```bash
+umask 077
+mkdir -p ./peardrop-inbox/
+chmod 700 ./peardrop-inbox/
+cat > ./drop.toml <<'TOML'
+title = "Share one API token"
+description = "Create a token for the requested project and permissions only."
+
+[copy]
+request = """
+1. Open the provider console using the button below.
+2. Select the requested project and create a token with only the requested permissions.
+3. Copy the token, paste it below, and select Send.
+"""
+
+[[fields]]
+name = "api_token"
+type = "token"
+label = "API token"
+description = "Paste the token from the provider console. Never put it in chat."
+link = { label = "Open the provider console", url = "https://console.example.com/api-tokens" }
+required = true
+masked = true
+TOML
+npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-inbox/ --ttl 15m --json
+```
+
+Run the receiver in the foreground in a persistent terminal session. Wait for `share_ready`, then immediately share that event's URL and fingerprint; `session` alone is not readiness. If the CLI reports `share_pending`, follow the canonical skill's readiness guidance. For the already-qualified routine path, no automated browser check, disposable transfer, package-source inspection, or custom wrapper is required. Keep the receiver running until delivery, expiry, or cancellation.
+
+### Same-machine local example
 
 The `local` command renders a fixed single-paste page by default. Pass `--spec <file.toml>` or `--spec-inline '<toml>'` to shape the page instead: multiple named fields, per-field validation, and copy overrides. A malformed or invalid spec fails immediately with a clear error and a non-zero exit code — no server is started.
 

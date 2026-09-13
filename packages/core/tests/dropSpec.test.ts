@@ -9,7 +9,7 @@ import { BridgeServer, DiskSink, type BridgeOnReceiveHook } from "../src/bridge/
 import { decodeDropSpec, DropSpecError, groupSpecFields, outstandingSpecFields, parseDropSpecToml, validateSpecSubmission, type FieldSubmission } from "../src/spec/dropSpec.js";
 import type { OnReceiveHookResult } from "../src/hooks/onReceive.js";
 
-const fixture = (name: string): string => readFileSync(join(import.meta.dirname, "fixtures/specs", name), "utf-8");
+const fixture = (name: string): string => readFileSync(new URL(`./fixtures/specs/${name}`, import.meta.url), "utf-8");
 
 const sha256Hex = (buf: Buffer): string => createHash("sha256").update(buf).digest("hex");
 
@@ -549,9 +549,19 @@ describe("[[groups]] and field-direction attributes (peardrop#34)", () => {
 // peardrop#90: keeps the shipped worked example from rotting silently —
 // scripts/check-skill-example.mjs guards it staying byte-identical to
 // SKILL.md's inline copy; this guards it staying a valid, decodable spec.
+describe("examples/api-token.toml (peardrop#96)", () => {
+  it("decodes one required masked token with setup instructions and a provider link", () => {
+    const spec = parseDropSpecToml(readFileSync(new URL("../../../examples/api-token.toml", import.meta.url), "utf-8"));
+    expect(spec.title).toBe("Share one API token");
+    expect(spec.copy.request).toContain("1. Open the provider console");
+    expect(spec.fields).toHaveLength(1);
+    expect(spec.fields[0]).toMatchObject({ type: "token", required: true, masked: true, link: { url: "https://console.example.com/api-tokens" } });
+  });
+});
+
 describe("examples/google-oauth-client.toml (peardrop#90)", () => {
   it("decodes with the group, entry_url, scope, resource_name, format, and shown_once secret intact", () => {
-    const exampleToml = readFileSync(join(import.meta.dirname, "../../../examples/google-oauth-client.toml"), "utf-8");
+    const exampleToml = readFileSync(new URL("../../../examples/google-oauth-client.toml", import.meta.url), "utf-8");
     const spec = parseDropSpecToml(exampleToml);
 
     expect(spec.groups).toHaveLength(1);

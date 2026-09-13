@@ -1,0 +1,18 @@
+title = "Share one API token"
+description = "Create a token for the requested project and permissions only."
+
+[copy]
+request = """
+1. Open the provider console using the button below.
+2. Select the requested project and create a token with only the requested permissions.
+3. Copy the token, paste it below, and select Send.
+"""
+
+[[fields]]
+name = "api_token"
+type = "token"
+label = "API token"
+description = "Paste the token from the provider console. Never put it in chat."
+link = { label = "Open the provider console", url = "https://console.example.com/api-tokens" }
+required = true
+masked = true
