@@ -128,7 +128,7 @@ export interface RelaySendResult {
 const RelayTicketSchema = Schema.Struct({
   ticket: Schema.NonEmptyString,
   relayUrl: Schema.NonEmptyString,
-  billingScheme: Schema.Literal("upto"),
+  billingScheme: Schema.Literals(["upto", "disabled"]),
   region: Schema.optional(Schema.NonEmptyString),
 });
 const DoneSchema = Schema.Struct({

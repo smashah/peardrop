@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import ReceiveCommand, { pollShareReadiness } from "../src/commands/receive.js";
 import SendCommand from "../src/commands/send.js";
+import { runDhtReceiver } from "@peardrop/core/node";
+import * as Effect from "effect/Effect";
 
 // receive.ts's own DHT networking is exercised elsewhere; the tests below
 // only need registration/readiness to complete so the safe-stdout and
@@ -15,11 +17,11 @@ vi.mock("@peardrop/core/node", async (importOriginal) => {
   const Effect = await import("effect/Effect");
   return {
     ...actual,
-    runDhtReceiver: (options: Parameters<typeof actual.runDhtReceiver>[0]) =>
+    runDhtReceiver: vi.fn((options: Parameters<typeof actual.runDhtReceiver>[0]) =>
       Effect.promise(async () => {
         await options.onConnected?.({ transport: "hyperdht", fileCount: 1, totalBytes: 5 });
         await options.onDelivered?.([{ name: "secret.txt", path: "/tmp/peardrop-test/secret.txt", sha256: "deadbeef" }]);
-      }),
+      })),
   };
 });
 
@@ -391,22 +393,39 @@ describe("peardrop CLI", () => {
   // (mocked DHT leg, isolated ~/.peardrop) and checks the joined stdout of
   // every event, not just the first line.
   describe("receive keeps ownerToken off stdout across a full session (peardrop#86, peardrop#90)", () => {
-    it("emits exactly one share_ready with the registered url, and no line carries ownerToken", async () => {
+    it.each(["delivered", "never-connected", "direct-connected", "relay-connected", "readiness-stalled", "cancelled"])("emits safe readiness and one terminal event for %s", async (state) => {
       const originalHome = process.env.HOME;
       const tempHome = mkdtempSync(join(tmpdir(), "peardrop-receive-home-"));
       const tempTarget = mkdtempSync(join(tmpdir(), "peardrop-receive-target-"));
       process.env.HOME = tempHome;
       const chunks = captureStdout();
+      let expiresAt = Infinity;
+      const expiring = state !== "delivered" && state !== "cancelled";
+      if (state !== "delivered") {
+        vi.mocked(runDhtReceiver).mockImplementationOnce((options) => Effect.promise(async () => {
+          if (state.endsWith("connected") && state !== "never-connected") {
+            await options.onConnected?.({ transport: "hyperdht", fileCount: 1, totalBytes: 5 });
+          }
+          if (state === "cancelled") process.emit("SIGTERM");
+        }).pipe(Effect.andThen(Effect.never)));
+      }
       vi.spyOn(globalThis, "fetch").mockImplementation((async (input: unknown, init?: RequestInit) => {
         const url = String(input);
         const method = init?.method ?? "GET";
         if (method === "POST" && url.endsWith("/api/tunnels")) {
+          expiresAt = Date.now() + 1_000;
           return new Response(
-            JSON.stringify({ slug: "test-drop", url: "https://peardrop.fyi/test-drop", ownerToken: "owner-secret-value", relayAllowed: false }),
+            JSON.stringify({ slug: "test-drop", url: "https://peardrop.fyi/test-drop", ownerToken: "owner-secret-value", relayAllowed: state === "relay-connected" }),
             { status: 200 }
           );
         }
         if (method === "GET" && url.endsWith("/api/tunnels/test-drop")) {
+          if (state === "readiness-stalled" && Date.now() < expiresAt) {
+            return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+          }
+          return new Response(null, { status: Date.now() >= expiresAt ? 404 : 200 });
+        }
+        if (method === "DELETE") {
           return new Response(null, { status: 200 });
         }
         if (method === "POST" && url.endsWith("/api/tunnels/test-drop/consumed")) {
@@ -416,7 +435,14 @@ describe("peardrop CLI", () => {
       }) as typeof fetch);
 
       try {
-        await runReceive(["--json", "--target", `${tempTarget}/`]);
+        const result = await runReceive(["--json", "--ttl", "1s", "--target", `${tempTarget}/`]).then(() => undefined, (error: unknown) => error);
+        if (state === "cancelled") expect(result).toBeDefined();
+        else expect(result).toBeUndefined();
+        if (expiring) {
+          expect(Date.now() - expiresAt).toBeLessThan(1_000);
+          expect((await fetch("https://peardrop.fyi/api/tunnels/test-drop")).status).toBe(404);
+          expect(JSON.parse(readFileSync(join(tempHome, ".peardrop", "tunnels", "test-drop.json"), "utf8")).status).toBe("expired");
+        }
       } finally {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;
@@ -430,8 +456,13 @@ describe("peardrop CLI", () => {
       expect(joined).not.toContain("ownerToken");
 
       const shareReadyEvents = events.filter((event) => event.event === "share_ready");
-      expect(shareReadyEvents).toHaveLength(1);
-      expect(shareReadyEvents[0]).toMatchObject({ url: "https://peardrop.fyi/test-drop", tunnelId: "test-drop", cancelWith: "peardrop cancel test-drop" });
+      expect(shareReadyEvents).toHaveLength(state === "readiness-stalled" ? 0 : 1);
+      if (shareReadyEvents[0]) expect(shareReadyEvents[0]).toMatchObject({ url: "https://peardrop.fyi/test-drop", tunnelId: "test-drop", cancelWith: "peardrop cancel test-drop" });
+      expect(events.filter((event) => event.event === "teardown")).toEqual([expect.objectContaining({
+        status: expiring ? "expired" : state === "delivered" ? "complete" : "cancelled",
+        ...(expiring ? { reason: "ttl-expired", expiresAt: expect.any(Number) } : {}),
+      })]);
+      expect(events.filter((event) => event.event === "error")).toHaveLength(0);
     });
   });
 });

@@ -42,6 +42,7 @@ const writeStdout = (line: string): Promise<void> =>
 
 const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
   new Promise((resolve) => {
+    if (signal.aborted) return resolve();
     const done = () => {
       clearTimeout(timer);
       signal.removeEventListener("abort", done);
@@ -130,7 +131,7 @@ export default class ReceiveCommand extends Command {
     target: Flags.string({ char: "t", description: "Target directory or file path", default: "./peardrop-inbox/" }),
     files: Flags.integer({ description: "Maximum expected file count" }),
     "max-size": Flags.integer({ description: "Maximum payload size in MB" }),
-    ttl: Flags.string({ description: "Tunnel TTL (e.g. 30s, 1h, 24h, 7d)", default: "1h" }),
+    ttl: Flags.string({ description: "Tunnel TTL (e.g. 30s, 1h, 24h, 7d); expiry emits teardown status=expired and exits 0", default: "1h" }),
     pin: Flags.boolean({ description: "Require a 6-digit PIN" }),
     // Relay is the default path (peardrop#22): the flag exists to turn it off,
     // never to turn it on. `--allow-relay` stays as a hidden alias so scripts
@@ -332,144 +333,161 @@ export default class ReceiveCommand extends Command {
     process.on("SIGINT", onSignal);
     process.on("SIGTERM", onSignal);
 
-    // The Worker needs a propagation moment before GET /api/tunnels/{slug}
-    // answers 200 — sharing the URL the instant registration returns can hand
-    // an agent a link that still 404s. Poll here, bounded, instead of leaving
-    // every operator to hand-write the same curl loop.
-    const readiness = await pollShareReadiness({
-      // An unread body would hold its connection open in undici's pool until
-      // GC, up to ~10 times over a full budget — only `.ok` is needed here,
-      // so the body is cancelled immediately after every poll.
-      fetchTunnel: async (signal) => {
-        const res = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}`, { signal });
-        const ok = res.ok;
-        await res.body?.cancel().catch(() => undefined);
-        return { ok };
-      },
-      signal: abort.signal,
-      sleep,
-    });
-
-    const printBanner = (pending: boolean) => {
-      const freeTierMB = RELAY_FREE_TIER_BYTES / (1024 * 1024);
-      this.log("\n=========================================");
-      this.log(` PearDrop Receiver Active`);
-      this.log(` URL: ${tunnelState.url}`);
-      this.log(` Fingerprint: ${fingerprint}`);
-      if (pinCode) this.log(` PIN required: ${pinCode}`);
-      this.log(` Target path: ${flags.target}`);
-      this.log(
-        ` Relay fallback: ${tunnelState.relayAllowed ? `Allowed (free up to ${freeTierMB}MB, then metered — max $0.06)` : "Disallowed (Direct-only)"}`
-      );
-      this.log("=========================================\n");
-      if (pending) {
-        this.log(`Not yet resolvable — re-check GET /api/tunnels/${tunnelState.tunnelId} before sharing this URL.`);
-      }
-      this.log("Waiting for sender connection...");
-    };
-
-    if (readiness !== "aborted") {
-      const shareFields = {
-        mode: "remote" as const,
-        url: tunnelState.url,
-        fingerprint,
-        expiresAt: tunnelState.expiresAt,
-        target: flags.target,
-        tunnelId: tunnelState.tunnelId,
-        fieldCount,
-        ...(pinCode !== undefined ? { pin: pinCode } : {}),
-        cancelWith,
-      };
-      if (readiness === "ready") {
-        // The only event an agent may share a URL from.
-        if (flags.json) {
-          await writeStdout(JSON.stringify({ ...shareFields, event: "share_ready", elapsedMs: elapsedMs(), pid: process.pid }));
-        } else if (!flags.verbose) {
-          printBanner(false);
-        }
-        writeVerbose("share_ready", { url: tunnelState.url, fieldCount });
-      } else {
-        const reason = `Worker did not confirm tunnel readiness (GET /api/tunnels/${tunnelState.tunnelId}) within ${READINESS_BUDGET_MS}ms`;
-        if (flags.json) {
-          await writeStdout(JSON.stringify({ ...shareFields, event: "share_pending", reason, elapsedMs: elapsedMs(), pid: process.pid }));
-        } else if (!flags.verbose) {
-          printBanner(true);
-        }
-        writeVerbose("share_pending", { reason });
-      }
-    }
-
-    // Lazy relay authorization. The Worker's own relay accounting is the only
-    // honest signal that direct P2P did not carry the transfer, so poll it and
-    // reach for the wallet exactly once relayed bytes trend over the free tier.
-    // Below that threshold no wallet is loaded and the Worker is never asked
-    // for payment requirements.
     let relayAuthorizationFailure: string | undefined;
-    const watchRelayOverage = async (): Promise<void> => {
-      if (!tunnelState.relayAllowed || !tunnelState.ownerToken) return;
-      let pollMs = RELAY_USAGE_POLL_MS;
-      while (!abort.signal.aborted && !relayAuthorizationFailure) {
-        await sleep(pollMs, abort.signal);
-        if (abort.signal.aborted) return;
+    let deliveryConfirmed = false;
+    let expired = false;
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+    const checkExpiry = () => {
+      if (abort.signal.aborted || deliveryConfirmed) return;
+      const remaining = tunnelState.expiresAt - Date.now();
+      if (remaining <= 0) {
+        expired = true;
+        abort.abort();
+      } else {
+        // Node clamps overflowing timer delays to 1ms; long TTLs need re-arming.
+        expiryTimer = setTimeout(checkExpiry, Math.min(remaining, 2_147_483_647));
+      }
+    };
+    checkExpiry();
 
-        let relayBytes: number;
-        try {
-          const status = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}/status`, {
-            headers: { Authorization: `Bearer ${tunnelState.ownerToken}` },
-            signal: abort.signal,
-          });
-          if (!status.ok) continue;
-          const body = (await status.json()) as { relayBytes?: number };
-          relayBytes = typeof body.relayBytes === "number" ? body.relayBytes : 0;
-        } catch {
-          continue;
-        }
-        pollMs = relayBytes > 0 ? RELAY_USAGE_POLL_MS : Math.min(pollMs * 2, RELAY_USAGE_POLL_MAX_MS);
-        if (!relayNeedsAuthorization(relayBytes)) continue;
+    try {
+      // The Worker needs a propagation moment before GET /api/tunnels/{slug}
+      // answers 200 — sharing the URL the instant registration returns can hand
+      // an agent a link that still 404s. Poll here, bounded, instead of leaving
+      // every operator to hand-write the same curl loop.
+      const readiness = await pollShareReadiness({
+        // An unread body would hold its connection open in undici's pool until
+        // GC, up to ~10 times over a full budget — only `.ok` is needed here,
+        // so the body is cancelled immediately after every poll.
+        fetchTunnel: async (signal) => {
+          const res = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}`, { signal });
+          const ok = res.ok;
+          await res.body?.cancel().catch(() => undefined);
+          return { ok };
+        },
+        signal: abort.signal,
+        sleep,
+      });
 
-        const authorization = await runEffect(
-          Effect.exit(authorizeRelayOverage({ workerUrl, relayCapGb: flags["relay-cap"], relayBytes }))
+      const printBanner = (pending: boolean) => {
+        const freeTierMB = RELAY_FREE_TIER_BYTES / (1024 * 1024);
+        this.log("\n=========================================");
+        this.log(` PearDrop Receiver Active`);
+        this.log(` URL: ${tunnelState.url}`);
+        this.log(` Fingerprint: ${fingerprint}`);
+        if (pinCode) this.log(` PIN required: ${pinCode}`);
+        this.log(` Target path: ${flags.target}`);
+        this.log(
+          ` Relay fallback: ${tunnelState.relayAllowed ? `Allowed (free up to ${freeTierMB}MB, then metered — max $0.06)` : "Disallowed (Direct-only)"}`
         );
-        if (Exit.isFailure(authorization)) {
-          const error = Cause.squash(authorization.cause);
-          const message = error instanceof Error ? error.message : String(error);
-          if (error instanceof WalletError && error.userActionable) {
-            relayAuthorizationFailure = message;
-            abort.abort();
-          } else {
-            // A Worker- or facilitator-side problem is not something the
-            // operator can fix mid-transfer, so keep receiving and say so.
-            this.warn(`Relay payment authorization is unavailable (${message}); the transfer continues but relay usage may not be billable.`);
+        this.log("=========================================\n");
+        if (pending) {
+          this.log(`Not yet resolvable — re-check GET /api/tunnels/${tunnelState.tunnelId} before sharing this URL.`);
+        }
+        this.log("Waiting for sender connection...");
+      };
+
+      if (readiness !== "aborted") {
+        const shareFields = {
+          mode: "remote" as const,
+          url: tunnelState.url,
+          fingerprint,
+          expiresAt: tunnelState.expiresAt,
+          target: flags.target,
+          tunnelId: tunnelState.tunnelId,
+          fieldCount,
+          ...(pinCode !== undefined ? { pin: pinCode } : {}),
+          cancelWith,
+        };
+        if (readiness === "ready") {
+          // The only event an agent may share a URL from.
+          if (flags.json) {
+            await writeStdout(JSON.stringify({ ...shareFields, event: "share_ready", elapsedMs: elapsedMs(), pid: process.pid }));
+          } else if (!flags.verbose) {
+            printBanner(false);
+          }
+          writeVerbose("share_ready", { url: tunnelState.url, fieldCount });
+        } else {
+          const reason = `Worker did not confirm tunnel readiness (GET /api/tunnels/${tunnelState.tunnelId}) within ${READINESS_BUDGET_MS}ms`;
+          if (flags.json) {
+            await writeStdout(JSON.stringify({ ...shareFields, event: "share_pending", reason, elapsedMs: elapsedMs(), pid: process.pid }));
+          } else if (!flags.verbose) {
+            printBanner(true);
+          }
+          writeVerbose("share_pending", { reason });
+        }
+      }
+
+      // Lazy relay authorization. The Worker's own relay accounting is the only
+      // honest signal that direct P2P did not carry the transfer, so poll it and
+      // reach for the wallet exactly once relayed bytes trend over the free tier.
+      // Below that threshold no wallet is loaded and the Worker is never asked
+      // for payment requirements.
+      const watchRelayOverage = async (): Promise<void> => {
+        if (!tunnelState.relayAllowed || !tunnelState.ownerToken) return;
+        let pollMs = RELAY_USAGE_POLL_MS;
+        while (!abort.signal.aborted && !relayAuthorizationFailure) {
+          await sleep(pollMs, abort.signal);
+          if (abort.signal.aborted) return;
+
+          let relayBytes: number;
+          try {
+            const status = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}/status`, {
+              headers: { Authorization: `Bearer ${tunnelState.ownerToken}` },
+              signal: abort.signal,
+            });
+            if (!status.ok) continue;
+            const body = (await status.json()) as { relayBytes?: number };
+            relayBytes = typeof body.relayBytes === "number" ? body.relayBytes : 0;
+          } catch {
+            continue;
+          }
+          pollMs = relayBytes > 0 ? RELAY_USAGE_POLL_MS : Math.min(pollMs * 2, RELAY_USAGE_POLL_MAX_MS);
+          if (!relayNeedsAuthorization(relayBytes)) continue;
+
+          const authorization = await runEffect(
+            Effect.exit(authorizeRelayOverage({ workerUrl, relayCapGb: flags["relay-cap"], relayBytes })),
+            { signal: abort.signal }
+          );
+          if (Exit.isFailure(authorization)) {
+            const error = Cause.squash(authorization.cause);
+            const message = error instanceof Error ? error.message : String(error);
+            if (error instanceof WalletError && error.userActionable) {
+              relayAuthorizationFailure = message;
+              abort.abort();
+            } else {
+              // A Worker- or facilitator-side problem is not something the
+              // operator can fix mid-transfer, so keep receiving and say so.
+              this.warn(`Relay payment authorization is unavailable (${message}); the transfer continues but relay usage may not be billable.`);
+            }
+            return;
+          }
+          if (authorization.value === null) continue;
+
+          // Hand the signed "upto" authorization to the Worker so it can settle
+          // the real byte count. Workers that predate deferred authorization
+          // (peardrop.fyi#20) reject this route — warn rather than interrupt an
+          // in-flight transfer.
+          const submitted = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}/relay-authorization`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${tunnelState.ownerToken}` },
+            body: JSON.stringify({ relayAuthorization: authorization.value, relayCapGB: flags["relay-cap"] }),
+            signal: abort.signal,
+          }).catch(() => undefined);
+          if (!submitted?.ok) {
+            this.warn(
+              `Relay usage passed the free tier but this Worker did not accept the deferred payment authorization (HTTP ${submitted?.status ?? "unreachable"}); the transfer continues but may not be billable.`
+            );
+          } else if (!flags.json) {
+            this.log("Relay usage passed the free tier — payment authorization signed and submitted.");
           }
           return;
         }
-        if (authorization.value === null) continue;
+      };
+      void watchRelayOverage().catch(() => undefined);
 
-        // Hand the signed "upto" authorization to the Worker so it can settle
-        // the real byte count. Workers that predate deferred authorization
-        // (peardrop.fyi#20) reject this route — warn rather than interrupt an
-        // in-flight transfer.
-        const submitted = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}/relay-authorization`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${tunnelState.ownerToken}` },
-          body: JSON.stringify({ relayAuthorization: authorization.value, relayCapGB: flags["relay-cap"] }),
-        }).catch(() => undefined);
-        if (!submitted?.ok) {
-          this.warn(
-            `Relay usage passed the free tier but this Worker did not accept the deferred payment authorization (HTTP ${submitted?.status ?? "unreachable"}); the transfer continues but may not be billable.`
-          );
-        } else if (!flags.json) {
-          this.log("Relay usage passed the free tier — payment authorization signed and submitted.");
-        }
-        return;
-      }
-    };
-    void watchRelayOverage().catch(() => undefined);
+      const sink = new DiskSink(flags.target);
 
-    const sink = new DiskSink(flags.target);
-    let deliveryConfirmed = false;
-
-    try {
       await runEffect(
         Effect.scoped(runDhtReceiver({
           keyPair,
@@ -479,6 +497,7 @@ export default class ReceiveCommand extends Command {
           maxFiles: flags.files,
           maxBytes: flags["max-size"] ? flags["max-size"] * 1024 * 1024 : undefined,
           onConnected: async (details) => {
+            abort.signal.throwIfAborted();
             if (flags.json) {
               await writeStdout(JSON.stringify({ mode: "remote", event: "connected", ...details, elapsedMs: elapsedMs(), pid: process.pid }));
             }
@@ -488,16 +507,21 @@ export default class ReceiveCommand extends Command {
             else if (!flags.json) this.log(`Sender connected — transport=${details.transport}${endpoint}${peer} files=${details.fileCount} bytes=${details.totalBytes}; receiving payload...`);
           },
           onDelivered: async (files) => {
+            abort.signal.throwIfAborted();
             await runEffect(updateSessionStatus(tunnelState.tunnelId, "waiting", {
               files: files as TunnelSession["files"],
             }));
             const consumption = await fetch(`${workerUrl}/api/tunnels/${tunnelState.tunnelId}/consumed`, {
               method: "POST",
               headers: { Authorization: `Bearer ${tunnelState.ownerToken}` },
+              signal: abort.signal,
             });
             if (!consumption.ok) {
               throw new Error(`Worker delivery confirmation failed with HTTP ${consumption.status}`);
             }
+            abort.signal.throwIfAborted();
+            deliveryConfirmed = true;
+            clearTimeout(expiryTimer);
             await runEffect(updateSessionStatus(tunnelState.tunnelId, "delivered"));
             // Side effect only: a failing hook is reported, never rolled back into
             // the delivery that already completed above.
@@ -509,7 +533,6 @@ export default class ReceiveCommand extends Command {
               });
               if (!flags.json) this.log(`on_receive hook: ${hook.ok ? "ok" : `failed (${hook.error ?? `exit ${hook.exitCode ?? hook.signal}`})`}`);
             }
-            deliveryConfirmed = true;
             if (flags.json) {
               await writeStdout(JSON.stringify({ mode: "remote", event: "delivered", transport: "hyperdht", files, elapsedMs: elapsedMs(), pid: process.pid }));
             }
@@ -522,13 +545,19 @@ export default class ReceiveCommand extends Command {
         { signal: abort.signal }
       );
     } catch (error) {
-      // An abort this command raised itself (relay overage with no wallet) is
-      // reported below with an actionable message, not as a fiber interrupt.
-      if (!relayAuthorizationFailure) throw error;
+      // Internal aborts are reported below as expiry or an actionable relay
+      // failure, without leaking an Effect interrupt into the event stream.
+      if (!relayAuthorizationFailure && !expired) throw error;
     } finally {
+      clearTimeout(expiryTimer);
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
       abort.abort();
+
+      if (expired) {
+        await runEffect(updateSessionStatus(tunnelState.tunnelId, "expired"))
+          .catch(() => this.warn("Could not persist expired session status; the receiver is still exiting."));
+      }
 
       if (signalReceived) {
         // Best-effort means shutdown can't hang on it either — a stalled
@@ -552,10 +581,13 @@ export default class ReceiveCommand extends Command {
           clearTimeout(cancelTimer);
         }
       }
+      const status = deliveryConfirmed ? "complete" : expired ? "expired" : signalReceived ? "cancelled" : "failed";
       if (flags.json) {
-        await writeStdout(JSON.stringify({ mode: "remote", event: "teardown", status: deliveryConfirmed ? "complete" : signalReceived ? "cancelled" : "failed", elapsedMs: elapsedMs(), pid: process.pid }));
+        await writeStdout(JSON.stringify({ mode: "remote", event: "teardown", status, ...(expired ? { reason: "ttl-expired", expiresAt: tunnelState.expiresAt } : {}), elapsedMs: elapsedMs(), pid: process.pid }));
+      } else if (expired) {
+        this.log("Tunnel TTL expired; receiver exiting.");
       }
-      writeVerbose("teardown", { status: deliveryConfirmed ? "complete" : signalReceived ? "cancelled" : "failed" });
+      writeVerbose("teardown", { status });
     }
 
     // The only point at which a missing wallet is an error: relay was actually
