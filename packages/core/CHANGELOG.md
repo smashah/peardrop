@@ -21,6 +21,16 @@
 
 
 
+
+## 1.6.0
+<sub>2026-09-13</sub>
+
+- [#99](https://github.com/smashah/peardrop/pull/99) [`501d09a`](https://github.com/smashah/peardrop/commit/501d09ae2654b8f1cdebcad6179fbce98fdbc653)  *(patch)*
+  Hosted receivers now stop at their advertised TTL, including while waiting for readiness or a sender and during direct or relay transfers. JSON output emits one terminal `teardown` event with `status: "expired"`, `reason: "ttl-expired"`, and `expiresAt`, without owner authority. Expiry saves the local session as expired and exits with status 0; successful delivery and cancellation retain their existing outcomes. Invalid, zero, negative, or overflowing TTL values are rejected before registration; durations require a positive whole number followed by `s`, `m`, `h`, or `d`.
+
+  The shared relay sender accepts free-tier tickets with `billingScheme: "disabled"` as well as paid `"upto"` tickets, and continues rejecting unknown schemes.
+- *(minor)* Version bump from group with `@peardrop/cli` v1.6.0
+
 ## 1.5.14
 <sub>2026-08-14</sub>
 

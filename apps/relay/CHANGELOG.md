@@ -21,6 +21,12 @@
 
 
 
+
+## 1.6.0
+<sub>2026-09-13</sub>
+
+- *(minor)* Version bump from group with `@peardrop/cli` v1.6.0
+
 ## 1.5.14
 <sub>2026-08-14</sub>
 

@@ -22,6 +22,21 @@
 
 
 
+
+## 1.6.0
+<sub>2026-09-13</sub>
+
+- [#91](https://github.com/smashah/peardrop/pull/91) [`6cc37ea`](https://github.com/smashah/peardrop/commit/6cc37eae5f332dda5cf42e55d2d04311b0472b1a)  *(minor)*
+  `receive` now waits for the Worker to confirm a new tunnel before reporting it shareable, so an agent no longer hands out a URL that can still 404 moments after creation. The receiver emits a new `share_ready` event once the tunnel is confirmed live (or `share_pending` with a reason if the Worker hasn't confirmed within a bounded wait — the receiver keeps running either way). The `session`, `share_ready`, and `share_pending` events carry a safe `cancelWith` reference instead of the receiver's owner token, which no longer appears anywhere in `--json` output. Other events do not include `cancelWith`. `--detach` is hidden in `--help` since background supervision isn't implemented; use a foreground receiver in its own pane instead.
+- [#98](https://github.com/smashah/peardrop/pull/98) [`98ccd0b`](https://github.com/smashah/peardrop/commit/98ccd0b588c9a2ad1d43cd73956b3354ebb756dd)  *(patch)*
+  Document a hosted one-token spec with protected-directory shell setup and a `share_ready` handoff, linked to the canonical skill. `--version` now reports the invoked executable and alternative PATH installations on stderr, making stale global copies visible without changing JSON receiver output or executing another CLI. Repository checks and spec fixtures now resolve files portably on the declared Node 20 minimum.
+
+  Hosted OAuth instructions now use the rendered redirect URI, resource name, and scopes without duplicating those values in descriptions.
+- [#99](https://github.com/smashah/peardrop/pull/99) [`501d09a`](https://github.com/smashah/peardrop/commit/501d09ae2654b8f1cdebcad6179fbce98fdbc653)  *(patch)*
+  Hosted receivers now stop at their advertised TTL, including while waiting for readiness or a sender and during direct or relay transfers. JSON output emits one terminal `teardown` event with `status: "expired"`, `reason: "ttl-expired"`, and `expiresAt`, without owner authority. Expiry saves the local session as expired and exits with status 0; successful delivery and cancellation retain their existing outcomes. Invalid, zero, negative, or overflowing TTL values are rejected before registration; durations require a positive whole number followed by `s`, `m`, `h`, or `d`.
+
+  The shared relay sender accepts free-tier tickets with `billingScheme: "disabled"` as well as paid `"upto"` tickets, and continues rejecting unknown schemes.
+
 ## 1.5.14
 <sub>2026-08-14</sub>
 
