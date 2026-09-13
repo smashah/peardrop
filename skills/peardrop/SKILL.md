@@ -41,6 +41,8 @@ npx --yes @peardrop/cli@latest local --spec ./drop.toml --target ./peardrop-inbo
 
 Keep the process alive. Hosted `receive --json` emits `session`, then a bounded internal readiness check, then either `share_ready` or `share_pending`, then `connected`, `delivered`, and terminal `teardown` or `error`. **`share_ready` is the share gate: never hand the URL to the sender from any other event.** `share_pending` means the Worker has not yet confirmed the tunnel within the bounded wait; the receiver keeps running — wait and re-check `GET /api/tunnels/<slug>` rather than sharing early. Local `local --json` instead emits `listening` and `closed`, including the hook result when a hook ran. Human diagnostics belong on stderr. A successful one-use receiver exits after receiver-confirmed delivery; before delivery it intentionally waits until delivery, TTL expiry, cancellation, or a signal.
 
+`receive --json` reports TTL expiry as a terminal `teardown` event with `status: "expired"`, `reason: "ttl-expired"`, and `expiresAt`, then exits with code 0.
+
 No event carries owner authority any more — the JSON stream is safe to log and retain in full. `session`, `share_ready`, and `share_pending` include `cancelWith` (`peardrop cancel <slug>`); the receiver's own 0600 session file on disk is what makes that command work, not anything printed to stdout.
 
 ## Do not hand over an unproved page
@@ -132,17 +134,10 @@ failure = "The value was not accepted. Keep this page open and follow the field 
 [hooks]
 on_receive = "./scripts/store-delivered-secret.sh"
 
-# The hosted secure.peardrop.fyi renderer does not yet render entry_url,
-# resource_name, or scope (smashah/peardrop.fyi#191) — it silently omits all
-# three. So the exact redirect URI, suggested client name, and scopes are
-# duplicated into this group's description as plain text too, or a sender on
-# that renderer sees copy telling them to use "the exact callback shown
-# below" with no callback visible. Remove this duplication once #191 lands;
-# the structured fields below already render correctly on the local bridge.
 [[groups]]
 name = "google_oauth_client"
 title = "Google OAuth client"
-description = "Create a new OAuth 2.0 Client ID in the example-project GCP project. Authorized redirect URI: https://example.com/auth/google/callback — Suggested client name: example-project-production — Scopes: openid, email, profile."
+description = "Create a new OAuth 2.0 Client ID in the example-project GCP project using the redirect URI, suggested client name, and scopes shown below."
 link = { label = "Create OAuth client credentials", url = "https://console.cloud.google.com/apis/credentials" }
 allOrNothing = true
 
