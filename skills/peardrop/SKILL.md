@@ -11,7 +11,7 @@ Always use the published CLI:
 npx --yes @peardrop/cli@latest --version
 ```
 
-Never substitute a remembered global binary, `npx peardrop`, a private collector, or an MCP the user did not choose. `npx --yes @peardrop/cli@latest agent` prints this skill and its references in full; `agent --install` copies them into your skill directories.
+Never substitute a remembered global binary, an unscoped npx package name, a private collector, or an MCP the user did not choose. `npx --yes @peardrop/cli@latest agent` prints this skill and its references in full; `agent --install` copies them into your skill directories.
 
 ## Create a drop
 
