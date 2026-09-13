@@ -131,7 +131,7 @@ export default class ReceiveCommand extends Command {
     target: Flags.string({ char: "t", description: "Target directory or file path", default: "./peardrop-inbox/" }),
     files: Flags.integer({ description: "Maximum expected file count" }),
     "max-size": Flags.integer({ description: "Maximum payload size in MB" }),
-    ttl: Flags.string({ description: "Tunnel TTL (e.g. 30s, 1h, 24h, 7d); expiry emits teardown status=expired and exits 0", default: "1h" }),
+    ttl: Flags.string({ description: "Tunnel TTL (e.g. 1m, 1h, 24h, 7d); expiry emits teardown status=expired and exits 0", default: "1h" }),
     pin: Flags.boolean({ description: "Require a 6-digit PIN" }),
     // Relay is the default path (peardrop#22): the flag exists to turn it off,
     // never to turn it on. `--allow-relay` stays as a hidden alias so scripts
@@ -212,7 +212,7 @@ export default class ReceiveCommand extends Command {
       ? Number(ttlMatch[1]) * (ttlMatch[2] === "d" ? 86400 : ttlMatch[2] === "h" ? 3600 : ttlMatch[2] === "m" ? 60 : 1)
       : NaN;
     if (!Number.isSafeInteger(ttlSec * 1000) || ttlSec <= 0) {
-      return this.fail("--ttl must be a positive whole-number duration in range, such as 30s, 5m, 1h, or 7d.", flags.json);
+      return this.fail("--ttl must be a positive whole-number duration in range, such as 60s, 5m, 1h, or 7d.", flags.json);
     }
 
     const workerUrl = flags["worker-url"].replace(/\/$/, "");
@@ -337,6 +337,7 @@ export default class ReceiveCommand extends Command {
 
     let relayAuthorizationFailure: string | undefined;
     let deliveryConfirmed = false;
+    let receiverCompleted = false;
     let expired = false;
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     const checkExpiry = () => {
@@ -546,6 +547,7 @@ export default class ReceiveCommand extends Command {
         })),
         { signal: abort.signal }
       );
+      receiverCompleted = true;
     } catch (error) {
       // Internal aborts are reported below as expiry or an actionable relay
       // failure, without leaking an Effect interrupt into the event stream.
@@ -583,7 +585,7 @@ export default class ReceiveCommand extends Command {
           clearTimeout(cancelTimer);
         }
       }
-      const status = deliveryConfirmed ? "complete" : expired ? "expired" : signalReceived ? "cancelled" : "failed";
+      const status = deliveryConfirmed && receiverCompleted ? "complete" : expired ? "expired" : signalReceived ? "cancelled" : "failed";
       if (flags.json) {
         await writeStdout(JSON.stringify({ mode: "remote", event: "teardown", status, ...(expired ? { reason: "ttl-expired", expiresAt: tunnelState.expiresAt } : {}), elapsedMs: elapsedMs(), pid: process.pid }));
       } else if (expired) {
