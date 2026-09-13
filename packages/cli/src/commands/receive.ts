@@ -22,6 +22,7 @@ import {
 } from "@peardrop/core/node";
 import { DropSpecError, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
 import { loadSpecFromFlags, specFlags } from "../specFlags.js";
+import { skillFreshnessNotice } from "./agent.js";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
@@ -243,6 +244,9 @@ export default class ReceiveCommand extends Command {
         .map(([key, value]) => `${key}=${String(value)}`);
       process.stderr.write(`[receiver] elapsedMs=${elapsedMs()} pid=${process.pid} phase=${phase}${details.length > 0 ? ` ${details.join(" ")}` : ""}\n`);
     };
+
+    const freshness = await skillFreshnessNotice().catch(() => undefined);
+    if (freshness) process.stderr.write(freshness);
 
     // Malformed/invalid specs fail here, before the Worker is ever asked for a
     // tunnel — the same fail-fast contract `local` gives before it starts a server.

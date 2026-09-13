@@ -31,7 +31,7 @@ const allowedFiles = new Set([
   "tsconfig.json",
   "turbo.json",
 ]);
-const allowedPrefixes = [".bumpy/", ".github/workflows/", "apps/relay/", "packages/cli/", "packages/core/", "patches/"];
+const allowedPrefixes = [".bumpy/", ".github/ISSUE_TEMPLATE/", ".github/workflows/", "apps/relay/", "packages/cli/", "packages/core/", "patches/"];
 const forbiddenText = [
   "@peardrop/" + "mcp",
   "../" + "mcp",

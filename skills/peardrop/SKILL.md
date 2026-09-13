@@ -114,4 +114,11 @@ Report the transport the CLI actually selected. Direct HyperDHT and non-custodia
 
 ## When something is wrong
 
-If `share_ready` never arrives, `npx --yes @peardrop/cli@latest status <slug>` disagrees with the stream, or delivery fails: keep the JSON stream (it contains no secrets), run `npx --yes @peardrop/cli@latest --version`, and file an issue at https://github.com/smashah/peardrop/issues with both. Release, transport, and rendering acceptance are maintainer tasks documented in the repository's `docs/`, not in this skill.
+Deterministic checks replace any browser ceremony:
+
+- `npx --yes @peardrop/cli@latest spec check --spec ./drop.toml` (or the same inline flags) validates the page and prints the exact fields, labels, links, and delivered filenames it will produce.
+- `npx --yes @peardrop/cli@latest hook test …` rehearses `--store` sinks and the hook with fake delivery files.
+- `npx --yes @peardrop/cli@latest status <slug>` reports the tunnel, the receiver pid, and its last event; `wait <slug>` replays the event log.
+- `npx --yes @peardrop/cli@latest doctor` checks installations on PATH, Node, Worker reachability, wallet, running receivers, installed skill freshness, and any `--store` sink you pass.
+
+If `share_ready` never arrives, `status` disagrees with the stream, or delivery fails: keep the JSON stream (it contains no secrets), run `doctor`, and file an issue with both at https://github.com/smashah/peardrop/issues/new?template=drop-problem.yml. Release, transport, and rendering acceptance are maintainer tasks documented in the repository's `docs/`, not in this skill.

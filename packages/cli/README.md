@@ -37,6 +37,12 @@ npx --yes @peardrop/cli@latest wallet status
 
 The private key is stored locally with mode `0600` and is redacted from command output. When production facilitator discovery does not report compatible Base mainnet support, PearDrop stays direct-only.
 
+## Check a spec, a machine, or a problem
+
+- `npx --yes @peardrop/cli@latest spec check --spec ./drop.toml` (or inline `--field …` flags) validates the page and prints the fields, labels, links, and delivered filenames it will produce; `--json` for a machine-readable report. A malformed spec fails here before any tunnel is created.
+- `npx --yes @peardrop/cli@latest doctor` checks the installations on PATH, Node version, Worker reachability, wallet state, running receivers, installed skill freshness, and any `--store` sink you pass; `--json` available. `--version` itself is quiet unless a second installation is on PATH.
+- Something still wrong? File it with the JSON stream and `doctor` output: https://github.com/smashah/peardrop/issues/new?template=drop-problem.yml
+
 ## Check the CLI installation
 
 Use `npx --yes @peardrop/cli@latest` for current commands instead of relying on a global `peardrop` from an unknown PATH entry. Run `npx --yes @peardrop/cli@latest --version` to print the active version; stderr identifies the invoked executable and any other PearDrop installations found on PATH, including which one a bare `peardrop` would select. Diagnostics read package metadata and never execute another installation.

@@ -1,0 +1,31 @@
+name: Drop problem
+description: A receive/send/local session did not behave as documented
+labels: [bug, area:cli]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: CLI version
+      description: Output of `npx --yes @peardrop/cli@latest --version`
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: peardrop doctor output
+      description: Paste the output of `npx --yes @peardrop/cli@latest doctor` (it contains no secrets)
+      render: text
+  - type: textarea
+    id: events
+    attributes:
+      label: JSON event stream
+      description: The receiver's `--json` lines, or the log named by `receive --detach`. The stream carries no secrets or owner tokens; redact anything you are unsure about.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true

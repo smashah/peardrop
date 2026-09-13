@@ -49,7 +49,7 @@ export async function installationDiagnostics(executable: string, searchPath = p
     lines.push(`Other PATH installation: ${JSON.stringify(candidate.path)} -> ${JSON.stringify(candidate.executable)} (version ${JSON.stringify(candidate.version ?? "unknown")})`);
   }
   if (candidates.some((candidate) => candidate && candidate.executable !== active?.executable)) {
-    lines.push("Multiple installations found. Use npx --yes @peardrop/cli@latest for current flags; remove the obsolete installation or correct PATH, then run hash -r in your shell.");
+    lines.push("Multiple installations found. Use npx --yes @peardrop/cli@latest for current flags; remove the obsolete installation or correct PATH, then run hash -r in your shell. `npx --yes @peardrop/cli@latest doctor` lists them.");
   }
   return `${lines.join("\n")}\n`;
 }
