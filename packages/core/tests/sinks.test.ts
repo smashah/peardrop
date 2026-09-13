@@ -40,6 +40,22 @@ describe("storage sinks", () => {
     }
   });
 
+  it("keeps the plaintext when a sink fails, so the only copy of the secret survives", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "peardrop-sinks-"));
+    try {
+      const unwritable = join(dir, "missing-dir", ".env");
+      const sink = parseSinkSpec(`env-file:path=${unwritable}`);
+      const delivered = join(dir, "pat.txt");
+      writeFileSync(delivered, "secret\n", { mode: 0o600 });
+      const results = await runSinks({ sinks: [sink], files: [{ name: "pat.txt", path: delivered }], ledgerPath: join(dir, "ledger.jsonl") });
+      expect(results.map((r) => [r.sink, r.ok])).toEqual([["env-file", false], ["file", false]]);
+      expect(existsSync(delivered)).toBe(true);
+      expect(results[1]?.detail).toContain("kept because a sink failed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(process.platform !== "darwin" || process.env.CI)("keychain sink: store via stdin, verify, remove", async () => {
     const sink = parseSinkSpec("keychain:service=peardrop.test.{field}");
     const stored = await storeToSink(sink, { field: "unit", value: 'va"lue\\x', suffix: "-t" });

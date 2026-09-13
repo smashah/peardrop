@@ -307,9 +307,11 @@ export async function runSinks(options: RunSinksOptions): Promise<SinkResult[]> 
     const value = readFileSync(file.path, "utf8").replace(/\r?\n$/, "");
     const bytes = statSync(file.path).size;
     const sha256 = createHash("sha256").update(value).digest("hex").slice(0, 12);
+    let allStored = true;
     for (const sink of options.sinks) {
       if (sink.kind === "file") continue;
       const result = await storeToSink(sink, { field, value, suffix: options.suffix });
+      if (!result.ok) allStored = false;
       results.push(result);
       try {
         mkdirSync(dirname(ledger), { recursive: true, mode: 0o700 });
@@ -318,7 +320,10 @@ export async function runSinks(options: RunSinksOptions): Promise<SinkResult[]> 
         // the ledger is bookkeeping; never fail a store over it
       }
     }
-    if (!keep) {
+    if (!keep && !allStored) {
+      // Never destroy the only copy of a just-pasted secret: a failed store keeps the 0600 file for a retry.
+      results.push({ sink: "file", field, ok: false, detail: `plaintext ${file.path} kept because a sink failed; store it by hand, then delete it` });
+    } else if (!keep) {
       try {
         writeFileSync(file.path, "\0".repeat(bytes));
         rmSync(file.path, { force: true });

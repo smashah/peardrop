@@ -190,7 +190,7 @@ export default class ReceiveCommand extends Command {
    * `wait`, `status`, and `cancel` use afterwards. Spec and flag validation
    * already happened above, so a bad request fails here, not silently in the log.
    */
-  private async runDetached(json: boolean): Promise<void> {
+  private async runDetached(json: boolean, flags: { store?: string[] }): Promise<void> {
     const logDir = join(homedir(), ".peardrop", "logs");
     mkdirSync(logDir, { recursive: true, mode: 0o700 });
     const logPath = join(logDir, `${Date.now()}-${randomBytes(4).toString("hex")}.log`);
@@ -208,7 +208,9 @@ export default class ReceiveCommand extends Command {
     child.once("exit", () => { exited = true; });
     const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 100));
 
-    const deadline = Date.now() + READINESS_BUDGET_MS + 20_000;
+    // Sink preflights (a Passbolt probe alone can take 20 s) run in the child before registration, so the
+    // parent's budget must cover them plus the Worker readiness poll; the child keeps running regardless.
+    const deadline = Date.now() + READINESS_BUDGET_MS + 20_000 + 30_000 * Math.max(1, (flags.store ?? []).length);
     let seen = 0;
     while (Date.now() < deadline) {
       let events: ReturnType<typeof parseReceiverEvents> = [];
@@ -321,7 +323,7 @@ export default class ReceiveCommand extends Command {
     // reports relayed bytes trending over that threshold.
     const allowRelay = flags["allow-relay"] ?? flags.relay;
 
-    if (flags.detach) return this.runDetached(flags.json);
+    if (flags.detach) return this.runDetached(flags.json, flags);
 
     let tunnelRes: {
       slug: string;
