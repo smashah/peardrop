@@ -24,6 +24,21 @@
 
 
 
+
+## 1.7.0
+<sub>2026-09-13</sub>
+
+- [`07980b4`](https://github.com/smashah/peardrop/commit/07980b43e1cdc96babaeb2c7349c6cd19093c726)  *(minor)*
+  Add `peardrop agent`, which prints the bundled agent skill and its references as one document (`--install` copies them into `~/.claude/skills` and `~/.agents/skills`, `--install --project` into the current project). The shipped skill is now a single fast path: create the inbox, write the spec, start `receive --json`, share the `share_ready` URL. Browser render gates, disposable-session proofs, and the pre-handoff receipt move to maintainer documents under `docs/` and no longer ship in the package. Root `--help` points agents at `peardrop agent`.
+- [`49df537`](https://github.com/smashah/peardrop/commit/49df53718bf2daa957d486d16810e02593e8a189)  *(minor)*
+  `receive` and `local` accept the drop page inline: `--title`, `--description`, `--request`, `--success`, `--failure`, repeatable `--field name:type[:label]`, and per-field `--field-link`, `--field-description`, `--field-scope`, `--field-resource-name`, `--field-entry-url`, `--field-placeholder`, `--field-format`, `--field-min-length`, `--field-max-length`, `--field-count`, `--field-message`, `--field-optional`, `--field-shown-once`, `--field-unmasked`. A routine one-token drop no longer needs a TOML file. `--print-spec` prints the equivalent TOML (for any spec source) and exits, so an inline drop can be promoted to a reusable `--spec`. Core exports `stringifyDropSpecToml`.
+- [`43f6386`](https://github.com/smashah/peardrop/commit/43f6386dc654327fe04a2db18950d80c72325599)  *(minor)*
+  `receive --detach` is implemented ([#88](https://github.com/smashah/peardrop/issues/88), [#112](https://github.com/smashah/peardrop/issues/112)): the CLI registers the tunnel, prints `session` and `share_ready`/`share_pending`, and leaves the receiver running as a background process whose event stream is appended to a 0600 log under `~/.peardrop/logs`. New `peardrop wait <slug>` follows a detached receiver to its terminal event; `status` reports the receiver pid, liveness, and last event; `cancel` stops the background process before tearing the tunnel down. Sessions record `pid` and `logPath`. The on_receive hook now runs with the CLI's working directory so relative paths resolve where the operator ran it ([#85](https://github.com/smashah/peardrop/issues/85)).
+- [`9cd9bc9`](https://github.com/smashah/peardrop/commit/9cd9bc94fe2bb838f7d0ecb62d655dae88e5f7c8)  *(minor)*
+  Built-in storage sinks: `receive --store` and `local --store` deliver each received value straight into macOS Keychain, Passbolt, 1Password, or a 0600 env file (or `file` to keep the plaintext), remove the plaintext delivery file, emit one value-free `stored` result per sink per field, and append metadata rows to `~/.peardrop/ledger.jsonl`. Sinks are preflighted (including a probe write for Keychain and Passbolt) before a URL is shared or a local server starts. New `peardrop hook test` rehearses sinks and, with `--run-hook`, the on_receive hook against fabricated delivery files, cleaning up after itself. `BridgeServer` accepts `afterReceive`; core exports the sink API.
+- [`1da83b3`](https://github.com/smashah/peardrop/commit/1da83b3b3d49e628ba150bd51a336c99f3a927cc)  *(minor)*
+  Deterministic verification instead of browser ceremony: `peardrop spec check` validates a TOML or inline spec and prints the fields, labels, links, and delivered filenames it will render; `peardrop doctor` reports installations on PATH, Node, Worker reachability, wallet, running receivers, installed-skill freshness, and optional `--store` sink preflights. `--version` is quiet unless a second installation is on PATH. `receive`/`local` print one stderr line when an installed skill copy is older than the running CLI, and `peardrop agent --update` refreshes every recorded install. A "Drop problem" GitHub issue template asks for the JSON stream and `doctor` output.
+
 ## 1.6.1
 <sub>2026-09-13</sub>
 
