@@ -1,10 +1,10 @@
 import { Command, Flags } from "@oclif/core";
 import { BridgeServer, DiskSink, resolveTargetLocation } from "@peardrop/core/node";
 import { runEffect } from "@peardrop/core/node";
-import { DropSpecError, parseDropSpecToml, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
+import { DropSpecError, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
+import { loadSpecFromFlags, specFlags } from "../specFlags.js";
 import * as Effect from "effect/Effect";
 import open from "open";
-import { readFileSync } from "node:fs";
 
 // process.stdout.write to a pipe is async on POSIX; awaiting the write
 // callback here guarantees the Drop URL is flushed before any subsequent
@@ -25,8 +25,7 @@ export default class LocalCommand extends Command {
     pin: Flags.boolean({ description: "Require PIN code" }),
     lan: Flags.boolean({ description: "Bind 0.0.0.0 for LAN access" }),
     json: Flags.boolean({ description: "Output JSON result" }),
-    spec: Flags.string({ description: "Path to a TOML drop-page spec file", exclusive: ["spec-inline"] }),
-    "spec-inline": Flags.string({ description: "Inline TOML drop-page spec", exclusive: ["spec"] }),
+    ...specFlags,
     "on-receive": Flags.string({ description: "Command to run after a successful drop (overrides [hooks] on_receive)" }),
   };
 
@@ -35,15 +34,20 @@ export default class LocalCommand extends Command {
 
     // Malformed/invalid specs fail here, before any server starts.
     let spec: DropSpec | undefined;
-    const specSource = flags["spec-inline"] ?? (flags.spec ? readFileSync(flags.spec, "utf-8") : undefined);
-    if (specSource !== undefined) {
-      try {
-        spec = parseDropSpecToml(specSource);
-      } catch (cause) {
-        const message = cause instanceof DropSpecError ? cause.message : cause instanceof Error ? cause.message : String(cause);
-        this.error(message, { exit: 1 });
+    try {
+      const loaded = loadSpecFromFlags(flags);
+      if (flags["print-spec"]) {
+        if (!loaded) this.error("--print-spec needs a spec: pass --spec, --spec-inline, or inline --title/--field flags.", { exit: 1 });
+        await writeStdout(loaded.toml);
+        return;
       }
-      if (spec && specNeedsDirectoryTarget(spec) && !flags.target.endsWith("/") && !flags.target.endsWith("\\")) {
+      spec = loaded?.spec;
+    } catch (cause) {
+      const message = cause instanceof DropSpecError ? cause.message : cause instanceof Error ? cause.message : String(cause);
+      this.error(message, { exit: 1 });
+    }
+    if (spec !== undefined) {
+      if (specNeedsDirectoryTarget(spec) && !flags.target.endsWith("/") && !flags.target.endsWith("\\")) {
         this.error(
           `Spec "${flags.target}" needs a directory target (multiple fields/files would collide on one path) — pass --target with a trailing slash.`,
           { exit: 1 }

@@ -43,6 +43,21 @@ Use `npx --yes @peardrop/cli@latest` for current commands instead of relying on 
 
 If a documented flag is missing, compare `command -v peardrop` and `peardrop --version` with the explicit current invocation above. An old binary cannot gain this diagnostic until it is updated. Remove the obsolete installation through the package manager that installed it, or put the intended installation first on PATH, then clear your shell's command cache with `hash -r`. Until then, keep using the explicit `npx --yes @peardrop/cli@latest` invocation.
 
+## Inline drop pages
+
+A routine drop needs no file: describe the page with flags on `receive` (or `local`).
+
+```bash
+npx --yes @peardrop/cli@latest receive --target ./peardrop-inbox/ --ttl 15m --json \
+  --title "Share one API token" \
+  --request "Create a token for the requested project and permissions only, copy it, paste it below, and select Send." \
+  --field api_token:token:"API token" \
+  --field-link "api_token=Open the provider console|https://console.example.com/api-tokens" \
+  --field-shown-once api_token
+```
+
+`--field name:type[:label]` is repeatable (`text`, `secret`, `token`, or `file`). Per-field modifiers are keyed by name: `--field-description`, `--field-link` (`name=url` or `name=Label|url`), `--field-scope name=a,b`, `--field-resource-name`, `--field-entry-url`, `--field-placeholder`, `--field-format`, `--field-min-length`, `--field-max-length`, `--field-count`, `--field-message`, `--field-optional name`, `--field-shown-once name`, `--field-unmasked name`. Page copy is `--title`, `--description`, `--request`, `--success`, `--failure`. Add `--print-spec` to print the equivalent TOML and exit, which is how an inline drop becomes a reusable `--spec` file. Inline flags and `--spec`/`--spec-inline` are mutually exclusive.
+
 ## TOML drop-page specs
 
 Agents: run `npx --yes @peardrop/cli@latest agent` to print the bundled skill and its references (the same files ship in this package under `skills/`), or `agent --install` to copy them into `~/.claude/skills` and `~/.agents/skills`. Both hosted `receive` and same-machine `local` accept `--spec <file.toml>` or `--spec-inline '<toml>'` for titles, instructions, links, named fields, and validation. The hosted workflow below needs only ordinary shell commands and the CLI's readiness output.

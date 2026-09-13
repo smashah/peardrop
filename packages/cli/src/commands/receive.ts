@@ -15,9 +15,9 @@ import {
   runOnReceiveHook,
   type TunnelSession,
 } from "@peardrop/core/node";
-import { DropSpecError, parseDropSpecToml, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
+import { DropSpecError, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
+import { loadSpecFromFlags, specFlags } from "../specFlags.js";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -150,8 +150,7 @@ export default class ReceiveCommand extends Command {
     // background supervision this CLI doesn't implement, not to implement it.
     detach: Flags.boolean({ description: "Run receiver in background", hidden: true }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
-    spec: Flags.string({ description: "Path to a TOML drop-page spec file", exclusive: ["spec-inline"] }),
-    "spec-inline": Flags.string({ description: "Inline TOML drop-page spec", exclusive: ["spec"] }),
+    ...specFlags,
     "on-receive": Flags.string({ description: "Command to run after a successful drop (overrides [hooks] on_receive)" }),
   };
 
@@ -183,8 +182,13 @@ export default class ReceiveCommand extends Command {
     // tunnel — the same fail-fast contract `local` gives before it starts a server.
     let spec: DropSpec | undefined;
     try {
-      const specSource = flags["spec-inline"] ?? (flags.spec ? readFileSync(flags.spec, "utf-8") : undefined);
-      if (specSource !== undefined) spec = parseDropSpecToml(specSource);
+      const loaded = loadSpecFromFlags(flags);
+      if (flags["print-spec"]) {
+        if (!loaded) return this.fail("--print-spec needs a spec: pass --spec, --spec-inline, or inline --title/--field flags.", flags.json);
+        await writeStdout(loaded.toml);
+        return;
+      }
+      spec = loaded?.spec;
     } catch (cause) {
       const message = cause instanceof DropSpecError ? cause.message : cause instanceof Error ? cause.message : String(cause);
       return this.fail(message, flags.json);

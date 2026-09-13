@@ -1,7 +1,7 @@
 /** TOML-defined drop page specs: field types, quantity, validation, and copy overrides. */
 import * as Schema from "effect/Schema";
 import * as Data from "effect/Data";
-import { parse as parseToml } from "smol-toml";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 export class DropSpecError extends Data.TaggedError("DropSpecError")<{
   readonly message: string;
@@ -201,6 +201,16 @@ export function parseDropSpecToml(tomlText: string): DropSpec {
     throw new DropSpecError({ message: `Malformed TOML: ${cause instanceof Error ? cause.message : String(cause)}` });
   }
   return decodeDropSpec(raw);
+}
+
+/**
+ * Serialises a raw spec object (the same shape TOML parses to) back into TOML
+ * text, so a drop authored with inline CLI flags can be saved as a reusable
+ * spec. Validates first so the printed text is always a loadable spec.
+ */
+export function stringifyDropSpecToml(raw: unknown): string {
+  decodeDropSpec(raw);
+  return stringifyToml(raw as Record<string, unknown>);
 }
 
 /** True when the spec can produce more than one delivered file, which requires a directory target. */

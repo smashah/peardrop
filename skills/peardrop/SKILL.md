@@ -24,21 +24,28 @@ This is the only path. Target: a shared URL within 90 seconds of a complete requ
    umask 077 && mkdir -p ./peardrop-inbox/ && chmod 700 ./peardrop-inbox/
    ```
 
-3. **Write the spec.** Start from the one-token example below. For more than one field, provider-specific scopes, or a storage hook, read [references/config-and-handoff.md](references/config-and-handoff.md) first. Preserve the request literally: do not invent fields, do not drop optional ones, and never put a secret value in the spec.
+3. **Describe the page.** For a routine drop use inline flags and no file at all (example below). Use a TOML spec (`--spec ./drop.toml`) when the page is reusable or elaborate: several grouped fields, provider scopes, a hook with configuration. `--print-spec` turns any inline drop into that TOML. For multi-field or hooked specs read [references/config-and-handoff.md](references/config-and-handoff.md) first. Preserve the request literally: do not invent fields, do not drop optional ones, and never put a secret value in the spec.
 4. **Start the receiver and keep it alive until a terminal event.** In an agent harness run it as a background task whose stdout you can read back; a human runs it in a terminal.
 
    ```bash
-   npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-inbox/ --ttl 15m --json
+   npx --yes @peardrop/cli@latest receive --target ./peardrop-inbox/ --ttl 15m --json \
+     --title "Share one API token" \
+     --request "Create a token for the requested project and permissions only, copy it, paste it below, and select Send." \
+     --field api_token:token:"API token" \
+     --field-link "api_token=Open the provider console|https://console.example.com/api-tokens" \
+     --field-shown-once api_token
    ```
+
+   With a TOML spec instead: `npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-inbox/ --ttl 15m --json`.
 
 5. **Wait for `share_ready`**, then share its `url` and `fingerprint` immediately. `session` is not readiness. `share_pending` means the Worker has not confirmed yet: keep waiting, or check `npx --yes @peardrop/cli@latest status <slug>`.
 6. **Give a short receipt**: CLI version, mode, target, TTL, PIN state, field count, URL, fingerprint, and what happens after receipt.
 
 Do not scan the Keychain, a vault, or the environment for existing values before creating a drop; it is never needed and harness classifiers block it. Ledgers, persistence, and issue filing happen after the URL is shared, never on the way to it.
 
-### Worked example: one API token
+### Worked example: one API token as a TOML spec
 
-The heredoc is byte-identical to [examples/api-token.toml](https://github.com/smashah/peardrop/blob/main/examples/api-token.toml). Replace the console URL and the project/permission wording with the actual request.
+The same page as the inline command above, as a reusable file. The heredoc is byte-identical to [examples/api-token.toml](https://github.com/smashah/peardrop/blob/main/examples/api-token.toml). Replace the console URL and the project/permission wording with the actual request.
 
 ```bash
 umask 077
