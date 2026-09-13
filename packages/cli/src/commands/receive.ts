@@ -207,11 +207,13 @@ export default class ReceiveCommand extends Command {
     const fingerprint = generateFingerprint(keyPair.publicKeyHex);
     const pinCode = flags.pin ? Math.floor(100000 + Math.random() * 900000).toString() : undefined;
 
-    let ttlSec = 3600;
-    if (flags.ttl.endsWith("s")) ttlSec = parseInt(flags.ttl, 10);
-    else if (flags.ttl.endsWith("m")) ttlSec = parseInt(flags.ttl, 10) * 60;
-    else if (flags.ttl.endsWith("h")) ttlSec = parseInt(flags.ttl, 10) * 3600;
-    else if (flags.ttl.endsWith("d")) ttlSec = parseInt(flags.ttl, 10) * 86400;
+    const ttlMatch = /^(\d+)([smhd])$/.exec(flags.ttl);
+    const ttlSec = ttlMatch
+      ? Number(ttlMatch[1]) * (ttlMatch[2] === "d" ? 86400 : ttlMatch[2] === "h" ? 3600 : ttlMatch[2] === "m" ? 60 : 1)
+      : NaN;
+    if (!Number.isSafeInteger(ttlSec * 1000) || ttlSec <= 0) {
+      return this.fail("--ttl must be a positive whole-number duration in range, such as 30s, 5m, 1h, or 7d.", flags.json);
+    }
 
     const workerUrl = flags["worker-url"].replace(/\/$/, "");
 
