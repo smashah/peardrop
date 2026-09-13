@@ -24,6 +24,13 @@
 
 
 
+
+## 1.7.1
+<sub>2026-09-13</sub>
+
+- [`5bebd4f`](https://github.com/smashah/peardrop/commit/5bebd4fe1a7eac64c596ee4529276aa302adf6f1)  *(patch)*
+  Every command prints one stderr line when a newer `@peardrop/cli` is published (registry checked at most daily, in the background, from a cache under `~/.peardrop/latest.json`; `PEARDROP_NO_UPDATE_CHECK=1` disables it), so a stale global never silently carries an old agent skill ([#115](https://github.com/smashah/peardrop/issues/115)). Storage-sink preflights run in parallel on `receive`, `local`, and `hook test`. `doctor --prune` deletes session files for expired tunnels and week-old finished sessions whose receiver is gone. The live-DHT core test retries once with a longer budget ([#100](https://github.com/smashah/peardrop/issues/100)) and the release verifier waits up to two minutes for npm metadata ([#105](https://github.com/smashah/peardrop/issues/105)).
+
 ## 1.7.0
 <sub>2026-09-13</sub>
 
