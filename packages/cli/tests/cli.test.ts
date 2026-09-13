@@ -191,6 +191,14 @@ describe("peardrop CLI", () => {
   });
 
   describe("receive --json never leaves a consumer with nothing to parse", () => {
+    it("rejects an invalid TTL as JSON before contacting the Worker", async () => {
+      const chunks = captureStdout();
+      const registration = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("must not register"));
+      await expect(runReceive(["--json", "--ttl", "s"])).rejects.toMatchObject({ oclif: { exit: 1 } });
+      expect(registration).not.toHaveBeenCalled();
+      expect(JSON.parse(chunks.join("").trim())).toMatchObject({ event: "error", error: expect.stringContaining("--ttl") });
+    });
+
     it("reports an unreachable Worker as one JSON line on stdout and exits non-zero", async () => {
       const chunks = captureStdout();
       // Port 1 is reserved and refuses immediately, so this is the registration
