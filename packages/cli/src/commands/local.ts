@@ -75,10 +75,8 @@ export default class LocalCommand extends Command {
     } catch (cause) {
       this.error(cause instanceof SinkError ? cause.message : String(cause), { exit: 1 });
     }
-    for (const sinkSpec of sinks) {
-      const check = await preflightSink(sinkSpec);
-      if (!check.ok) this.error(`Storage sink ${sinkSpec.kind} failed preflight: ${check.detail}. No drop page was started.`, { exit: 1 });
-    }
+    const failedPreflight = (await Promise.all(sinks.map(async (sinkSpec) => ({ sinkSpec, check: await preflightSink(sinkSpec) })))).find(({ check }) => !check.ok);
+    if (failedPreflight) this.error(`Storage sink ${failedPreflight.sinkSpec.kind} failed preflight: ${failedPreflight.check.detail}. No drop page was started.`, { exit: 1 });
     const stored: SinkResult[] = [];
 
     const host = flags.lan ? "0.0.0.0" : "127.0.0.1";

@@ -13,7 +13,7 @@ npx --yes @peardrop/cli@latest --version
 
 Never substitute a remembered global binary, an unscoped npx package name, a private collector, or an MCP the user did not choose.
 
-If your harness refuses to run npx (a permission classifier, an offline sandbox), check the bare binary with `peardrop --version` and use it only when its version is at least the one named at the top of this document; an older `peardrop` lacks `--detach`, `--store`, `hook test`, and `spec check`, and its bundled copy of this skill is stale. Ask the human to run `npm install -g @peardrop/cli@latest` rather than continuing with an old CLI. `npx --yes @peardrop/cli@latest agent` prints this skill and its references in full; `agent --install` copies them into your skill directories.
+If your harness refuses to run npx (a permission classifier, an offline sandbox), check the bare binary with `peardrop --version` and use it only when its version is at least the one named at the top of this document; an older `peardrop` lacks `--detach`, `--store`, `hook test`, and `spec check`, and its bundled copy of this skill is stale. Ask the human to run `npm install -g @peardrop/cli@latest` rather than continuing with an old CLI. `npx --yes @peardrop/cli@latest agent` prints this skill and its references in full. Run `npx --yes @peardrop/cli@latest agent --install` once per machine so the skill loads with your harness next time instead of being fetched; `agent --update` refreshes it after a CLI release.
 
 ## Create a drop
 

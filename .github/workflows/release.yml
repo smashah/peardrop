@@ -133,15 +133,16 @@ jobs:
           set -euo pipefail
           verify_package() {
             package=$1
-            for attempt in 1 2 3 4 5; do
+            # npm metadata can lag a successful publish by well over a minute (#105).
+            for attempt in $(seq 1 24); do
               if published_version=$(npm view "$package@$VERSION" version 2>/dev/null) && [ "$published_version" = "$VERSION" ]; then
                 return 0
               fi
-              if [ "$attempt" -lt 5 ]; then
-                sleep 3
+              if [ "$attempt" -lt 24 ]; then
+                sleep 5
               fi
             done
-            echo "$package@$VERSION did not become visible after 5 attempts" >&2
+            echo "$package@$VERSION did not become visible after 24 attempts (2 minutes)" >&2
             return 1
           }
           verify_package @peardrop/core

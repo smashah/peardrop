@@ -35,6 +35,7 @@ describe("@peardrop/core/node", () => {
     }
   }, 3_000);
 
+  // Live public-DHT round trip: the runner's network decides the timing (#100).
   effectIt.effect(
     "delivers headless DHT bytes only after receiver DONE acknowledgement",
     () => Effect.scoped(Effect.gen(function* () {
@@ -88,7 +89,7 @@ describe("@peardrop/core/node", () => {
       yield* Effect.sync(() => sender.close());
       yield* Fiber.join(receiver).pipe(Effect.timeout("1 second"));
     })),
-    { timeout: 15_000 }
+    { timeout: 30_000, retry: 1 }
   );
   effectIt.effect("waits for receiver ACCEPT and DONE before sender delivery", () =>
     Effect.gen(function* () {

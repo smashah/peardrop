@@ -10,6 +10,20 @@ if (process.argv.length === 3 && process.argv[2] === "--version") {
   if (diagnostics.includes("Multiple installations found")) process.stderr.write(diagnostics);
 }
 
+// A stale global is the worst case for agents (#115): say so once per day, from cache, never on the critical path.
+let settleRefresh = async () => {};
+try {
+  const latest = await import("../dist/diagnostics/latest.js");
+  const { createRequire } = await import("node:module");
+  const { version } = createRequire(import.meta.url)("../package.json");
+  const notice = await latest.latestVersionNotice(version);
+  if (notice) process.stderr.write(notice);
+  // The daily registry refresh runs alongside the command; give it at most 2.5 s to land after the command ends.
+  settleRefresh = () => Promise.race([latest.pendingRefresh, new Promise((resolve) => setTimeout(resolve, 2_500).unref())]);
+} catch {
+  // never let the notice break a command
+}
+
 await run(normalizeCliArgv(process.argv.slice(2)), import.meta.url)
   .catch(async (error) => handle(error))
-  .finally(async () => flush());
+  .finally(async () => { await settleRefresh(); await flush(); });

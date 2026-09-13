@@ -55,7 +55,7 @@ export default class HookTestCommand extends Command {
       else this.log(`${result.ok ? "ok  " : "FAIL"} ${stage.padEnd(9)} ${result.detail}`);
     };
 
-    for (const sink of sinks) await report("preflight", await preflightSink(sink));
+    for (const result of await Promise.all(sinks.map(preflightSink))) await report("preflight", result);
 
     const dir = mkdtempSync(join(tmpdir(), "peardrop-hook-test-"));
     try {

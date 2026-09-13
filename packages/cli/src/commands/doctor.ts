@@ -1,5 +1,5 @@
 import { Command, Flags } from "@oclif/core";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSinkSpec, preflightSink, SinkError, walletPath } from "@peardrop/core/node";
@@ -21,6 +21,7 @@ export default class DoctorCommand extends Command {
     json: Flags.boolean({ description: "Print checks as JSON" }),
     store: Flags.string({ multiple: true, description: "Sink to preflight, e.g. keychain:service=x or passbolt:folder=<id>" }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
+    prune: Flags.boolean({ description: "Delete session files for tunnels that have expired, or finished more than 7 days ago, and whose receiver is not running" }),
   };
 
   public async run(): Promise<void> {
@@ -60,18 +61,35 @@ export default class DoctorCommand extends Command {
     const tunnels = join(homedir(), ".peardrop", "tunnels");
     let running = 0;
     let waiting = 0;
+    let prunable = 0;
+    let pruned = 0;
     if (existsSync(tunnels)) {
+      const now = Date.now();
       for (const name of readdirSync(tunnels).filter((n) => n.endsWith(".json"))) {
+        const file = join(tunnels, name);
         try {
-          const session = JSON.parse(readFileSync(join(tunnels, name), "utf8")) as { status?: string; pid?: number };
+          const session = JSON.parse(readFileSync(file, "utf8")) as { status?: string; pid?: number; expiresAt?: number };
+          const alive = isProcessAlive(session.pid);
           if (session.status === "waiting") waiting += 1;
-          if (session.status === "waiting" && isProcessAlive(session.pid)) running += 1;
+          if (session.status === "waiting" && alive) running += 1;
+          const expired = typeof session.expiresAt === "number" && session.expiresAt < now;
+          const finishedLongAgo = session.status !== "waiting" && statSync(file).mtimeMs < now - 7 * 24 * 3600 * 1000;
+          if (!alive && (expired || finishedLongAgo)) {
+            prunable += 1;
+            if (flags.prune) {
+              rmSync(file, { force: true });
+              pruned += 1;
+            }
+          }
         } catch {
           // ignore unreadable sessions
         }
       }
-      const mode = statSync(tunnels).mode & 0o777;
-      checks.push({ name: "sessions", ok: mode === 0o700 || mode === 0o755 || true, detail: `${tunnels}: ${running} receiver${running === 1 ? "" : "s"} running, ${waiting} session${waiting === 1 ? "" : "s"} waiting` });
+      checks.push({
+        name: "sessions",
+        ok: true,
+        detail: `${tunnels}: ${running} receiver${running === 1 ? "" : "s"} running, ${waiting} session${waiting === 1 ? "" : "s"} waiting, ${prunable} stale${flags.prune ? ` (${pruned} pruned)` : prunable > 0 ? " (doctor --prune removes them)" : ""}`,
+      });
     } else {
       checks.push({ name: "sessions", ok: true, detail: "no sessions yet" });
     }

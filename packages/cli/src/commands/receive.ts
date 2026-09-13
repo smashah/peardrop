@@ -284,13 +284,15 @@ export default class ReceiveCommand extends Command {
     } catch (cause) {
       return this.fail(cause instanceof SinkError ? cause.message : String(cause), flags.json);
     }
-    if (!flags.detach) {
-      for (const sink of sinks) {
-        const check = await preflightSink(sink);
+    if (!flags.detach && sinks.length > 0) {
+      // Preflights are independent (different backends), so they run at once: a Passbolt probe is ~10 s on its own.
+      const checks = await Promise.all(sinks.map(async (sink) => ({ sink, check: await preflightSink(sink) })));
+      for (const { sink, check } of checks) {
         if (flags.json) await writeStdout(JSON.stringify({ mode: "remote", event: "sink_preflight", sink: sink.kind, ok: check.ok, detail: check.detail, elapsedMs: elapsedMs(), pid: process.pid }));
         else if (flags.verbose || !check.ok) this.log(`sink preflight ${sink.kind}: ${check.ok ? "ok" : "FAILED"} — ${check.detail}`);
-        if (!check.ok) return this.fail(`Storage sink ${sink.kind} failed preflight: ${check.detail}. No public PearDrop URL was created.`, flags.json);
       }
+      const failed = checks.find(({ check }) => !check.ok);
+      if (failed) return this.fail(`Storage sink ${failed.sink.kind} failed preflight: ${failed.check.detail}. No public PearDrop URL was created.`, flags.json);
     }
 
     const keySeed = randomBytes(32);
