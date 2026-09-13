@@ -12,6 +12,8 @@ const allowedFiles = new Set([
   "LICENSE",
   "README.md",
   "docs/RELEASING.md",
+  "docs/release-acceptance.md",
+  "docs/transport-diagnostics.md",
   "examples/api-token.toml",
   "examples/google-oauth-client.toml",
   "fly.toml",
@@ -26,7 +28,6 @@ const allowedFiles = new Set([
   "scripts/package-smoke.mjs",
   "skills/peardrop/SKILL.md",
   "skills/peardrop/references/config-and-handoff.md",
-  "skills/peardrop/references/transport-diagnostics.md",
   "tsconfig.json",
   "turbo.json",
 ]);

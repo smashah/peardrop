@@ -1,7 +1,7 @@
 {
   "name": "@peardrop/cli",
   "version": "1.6.1",
-  "description": "PearDrop CLI: Secure, ephemeral file/secret drops for agents and humans",
+  "description": "PearDrop CLI: Secure, ephemeral file/secret drops for agents and humans. Agents: run `peardrop agent` for the full workflow.",
   "license": "MIT",
   "repository": {
     "type": "git",

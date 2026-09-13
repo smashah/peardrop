@@ -45,7 +45,7 @@ If a documented flag is missing, compare `command -v peardrop` and `peardrop --v
 
 ## TOML drop-page specs
 
-Agents should read the [canonical PearDrop skill](https://github.com/smashah/peardrop/blob/main/skills/peardrop/SKILL.md) before creating a drop. Both hosted `receive` and same-machine `local` accept `--spec <file.toml>` or `--spec-inline '<toml>'` for titles, instructions, links, named fields, and validation. The hosted workflow below needs only ordinary shell commands and the CLI's readiness output.
+Agents: run `npx --yes @peardrop/cli@latest agent` to print the bundled skill and its references (the same files ship in this package under `skills/`), or `agent --install` to copy them into `~/.claude/skills` and `~/.agents/skills`. Both hosted `receive` and same-machine `local` accept `--spec <file.toml>` or `--spec-inline '<toml>'` for titles, instructions, links, named fields, and validation. The hosted workflow below needs only ordinary shell commands and the CLI's readiness output.
 
 ### Hosted example: one API token
 
@@ -78,7 +78,7 @@ TOML
 npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-inbox/ --ttl 15m --json
 ```
 
-Run the receiver in the foreground in a persistent terminal session. Wait for `share_ready`, then immediately share that event's URL and fingerprint; `session` alone is not readiness. If the CLI reports `share_pending`, follow the canonical skill's readiness guidance. For the already-qualified routine path, no automated browser check, disposable transfer, package-source inspection, or custom wrapper is required. Keep the receiver running until delivery, expiry, or cancellation.
+Run the receiver in a terminal, or as a background task whose stdout you can read back. Wait for `share_ready`, then immediately share that event's URL and fingerprint; `session` alone is not readiness, and `share_pending` means keep waiting. `share_ready` is the proof the page works: no browser check, disposable transfer, or wrapper script is needed. Keep the receiver running until delivery, expiry, or cancellation.
 
 ### Same-machine local example
 

@@ -1,6 +1,6 @@
 # Structured drop configuration and handoff
 
-Use this reference whenever a drop has more than one field, provider-specific instructions, credential scopes, a storage hook, or a real handoff that must remain untouched.
+Use this reference whenever a drop has more than one field, provider-specific instructions, credential scopes, or a storage hook. Routine single-token drops do not need it: the worked example in SKILL.md is enough.
 
 ## Author the spec from the request
 
@@ -105,34 +105,50 @@ The hook receives:
 
 For each file, the hook reads the value from disk, writes only the approved sinks, records ledger metadata without the value, deletes the plaintext, and only then reports per-sink outcomes. Never pass the value on argv, place it in process logs, or collapse several sink results into one ambiguous success.
 
-## Pre-handoff receipt
+## Worked example: grouped provider OAuth credential
 
-Do not emit the real URL until every line has a concrete value:
+The recurring shape a single-field example does not cover: one provider console, a redirect URI the sender must carry to that console, explicit scopes, a suggested resource name, and a masked shown-once secret. This is [examples/google-oauth-client.toml](https://github.com/smashah/peardrop/blob/main/examples/google-oauth-client.toml) verbatim; `scripts/check-skill-example.mjs` fails CI if this copy drifts.
 
-```text
-CLI version:
-Requested mode: hosted | local
-Mode-specific command:
-Target (directory ends in / when multi-field):
-TTL / expiry:
-PIN required: yes | no
-Expected field count:
-Field names, types, and required states:
-Provider/account boundary and exclusions:
-Rendered field count:
-Rendered actionable links:
-Submit enabled and exercised on disposable session: yes | no
-Disposable received byte count/hash:
-Disposable selected transport: hyperdht | relay | local
-Disposable Relay mode: non-custodial | custodial-fallback | not-applicable
-Disposable receiver exit and public cancellation/consumption result:
-Disposable storage hook and per-sink result:
-Real session created after proof and untouched: yes | no
-Real URL and fingerprint:
+```toml
+# examples/google-oauth-client.toml
+title = "Create the Google OAuth client"
+description = "Create this in the named GCP project only. Do not grant access to other projects or shared credentials."
+
+[copy]
+request = "Create the OAuth client using the link below, then paste the client ID and the client secret shown once. They will be stored in the approved vault and the plaintext delivery files will be removed."
+success = "Received by PearDrop. The receiver will now run the configured storage hook."
+failure = "The value was not accepted. Keep this page open and follow the field error."
+
+[hooks]
+on_receive = "./scripts/store-delivered-secret.sh"
+
+[[groups]]
+name = "google_oauth_client"
+title = "Google OAuth client"
+description = "Create a new OAuth 2.0 Client ID in the example-project GCP project using the redirect URI, suggested client name, and scopes shown below."
+link = { label = "Create OAuth client credentials", url = "https://console.cloud.google.com/apis/credentials" }
+allOrNothing = true
+
+[[fields]]
+name = "client_id"
+type = "text"
+label = "OAuth client ID"
+description = "Copy the client ID shown after creating the credential."
+group = "google_oauth_client"
+entry_url = "https://example.com/auth/google/callback"
+resource_name = "example-project-production"
+scope = ["openid", "email", "profile"]
+required = true
+format = "^[0-9]+-[a-z0-9]+\\.apps\\.googleusercontent\\.com$"
+
+[[fields]]
+name = "client_secret"
+type = "secret"
+label = "OAuth client secret"
+description = "Shown once at creation time — copy it before leaving the provider page."
+group = "google_oauth_client"
+shown_once = true
+required = true
+masked = true
+minLength = 20
 ```
-
-Validate the installed artifact, not the tag name alone. Record `npx --yes @peardrop/cli@latest --version`; when the handoff depends on a recent fix, verify a clean registry install contains that fix before creating the session.
-
-Acceptance must use an identical disposable session. Verify the rendered controls, links, submission, exact receiver bytes/hash, receiver-confirmed delivery, process exit, and unusable consumed/cancelled URL. An HTTP 200, fetched JavaScript bundle, style tag, app shell, source marker, or package publish status proves none of those user outcomes.
-
-Create the real one-use session only after acceptance. Do not open, automate, submit, or consume it. Hand over its URL and fingerprint with the target, expiry, requested fields, selected mode, PIN state, and storage outcome.
