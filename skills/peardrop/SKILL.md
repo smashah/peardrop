@@ -31,7 +31,7 @@ This is the only path. Target: a shared URL within 90 seconds of a complete requ
    npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-inbox/ --ttl 15m --json
    ```
 
-5. **Wait for `share_ready`**, then share its `url` and `fingerprint` immediately. `session` is not readiness. `share_pending` means the Worker has not confirmed yet: keep waiting, or check `peardrop status <slug>`.
+5. **Wait for `share_ready`**, then share its `url` and `fingerprint` immediately. `session` is not readiness. `share_pending` means the Worker has not confirmed yet: keep waiting, or check `npx --yes @peardrop/cli@latest status <slug>`.
 6. **Give a short receipt**: CLI version, mode, target, TTL, PIN state, field count, URL, fingerprint, and what happens after receipt.
 
 Do not scan the Keychain, a vault, or the environment for existing values before creating a drop; it is never needed and harness classifiers block it. Ledgers, persistence, and issue filing happen after the URL is shared, never on the way to it.
@@ -69,7 +69,7 @@ npx --yes @peardrop/cli@latest receive --spec ./drop.toml --target ./peardrop-in
 
 ## Events
 
-Hosted `receive --json` emits `session`, then `share_ready` or `share_pending`, then `connected`, `delivered`, and a terminal `teardown` or `error`. TTL expiry is `teardown` with `status: "expired"` and exit code 0. `local --json` emits `listening` and `closed` (including the hook result). Every event is a compact JSON line on stdout; human diagnostics go to stderr. No event carries owner authority, so the stream is safe to log in full. `session`, `share_ready`, and `share_pending` include `cancelWith` (`peardrop cancel <slug>`).
+Hosted `receive --json` emits `session`, then `share_ready` or `share_pending`, then `connected`, `delivered`, and a terminal `teardown` or `error`. TTL expiry is `teardown` with `status: "expired"` and exit code 0. `local --json` emits `listening` and `closed` (including the hook result). Every event is a compact JSON line on stdout; human diagnostics go to stderr. No event carries owner authority, so the stream is safe to log in full. `session`, `share_ready`, and `share_pending` include `cancelWith`, the exact command that cancels the drop.
 
 A page view, ticket, socket close, attempted send, or sender-side final frame is never delivery; only authenticated receiver acknowledgement completes and consumes the drop. On cancellation, failure, expiry, or a signal the receiver tears the public session down.
 
@@ -94,4 +94,4 @@ Report the transport the CLI actually selected. Direct HyperDHT and non-custodia
 
 ## When something is wrong
 
-If `share_ready` never arrives, `peardrop status <slug>` disagrees with the stream, or delivery fails: keep the JSON stream (it contains no secrets), run `npx --yes @peardrop/cli@latest --version`, and file an issue at https://github.com/smashah/peardrop/issues with both. Release, transport, and rendering acceptance are maintainer tasks documented in the repository's `docs/`, not in this skill.
+If `share_ready` never arrives, `npx --yes @peardrop/cli@latest status <slug>` disagrees with the stream, or delivery fails: keep the JSON stream (it contains no secrets), run `npx --yes @peardrop/cli@latest --version`, and file an issue at https://github.com/smashah/peardrop/issues with both. Release, transport, and rendering acceptance are maintainer tasks documented in the repository's `docs/`, not in this skill.
