@@ -283,6 +283,8 @@ export interface BridgeServerOptions {
   expectedFiles?: number;
   spec?: DropSpec;
   onReceive?: BridgeOnReceiveHook;
+  /** Runs after delivery and after the on_receive hook (e.g. built-in storage sinks). Errors are logged, never rethrown. */
+  afterReceive?: (files: ReadonlyArray<DeliveredFile>) => Promise<void>;
   /** Sink for hook output; defaults to this process's stderr. */
   hookLog?: (chunk: string) => void;
   /** Display slug for the drop URL. Generated when omitted; never authorizes anything. */
@@ -327,6 +329,7 @@ export class BridgeServer {
   private expectedFiles?: number;
   private spec?: DropSpec;
   private onReceive?: BridgeOnReceiveHook;
+  private afterReceive?: (files: ReadonlyArray<DeliveredFile>) => Promise<void>;
   private hookLog?: (chunk: string) => void;
   private lastHookResult: OnReceiveHookResult | null = null;
   private lastOutstandingFields: ReadonlyArray<string> | null = null;
@@ -346,6 +349,7 @@ export class BridgeServer {
     this.expectedFiles = options.expectedFiles;
     this.spec = options.spec;
     this.onReceive = options.onReceive;
+    this.afterReceive = options.afterReceive;
     this.hookLog = options.hookLog;
   }
 
@@ -365,13 +369,21 @@ export class BridgeServer {
    * stands regardless of what the side effect does.
    */
   private async runReceiveHook(deliveredFiles: ReadonlyArray<DeliveredFile>): Promise<void> {
-    if (!this.onReceive) return;
-    this.lastHookResult = await runOnReceiveHook({
-      command: this.onReceive.command,
-      targetPath: this.onReceive.targetPath,
-      files: deliveredFiles,
-      log: this.hookLog,
-    });
+    if (this.onReceive) {
+      this.lastHookResult = await runOnReceiveHook({
+        command: this.onReceive.command,
+        targetPath: this.onReceive.targetPath,
+        files: deliveredFiles,
+        log: this.hookLog,
+      });
+    }
+    if (this.afterReceive) {
+      try {
+        await this.afterReceive(deliveredFiles);
+      } catch (cause) {
+        (this.hookLog ?? ((chunk: string) => void process.stderr.write(chunk)))(`peardrop: post-receive storage failed (${cause instanceof Error ? cause.message : String(cause)}). The drop was delivered and is unaffected.\n`);
+      }
+    }
   }
 
   async start(): Promise<{ url: string; port: number; token: string; slug: string }> {

@@ -95,6 +95,8 @@ For the recurring grouped-provider-OAuth shape (one console link, a redirect URI
 
 ## Hook contract
 
+Reach for a hook only when no built-in `--store` sink (keychain, passbolt, 1password, env-file) covers the destination; sinks are preflighted and reported per field, a hook is not.
+
 Use a small wrapper script as `on_receive`; do not put a secret value in the TOML command. If the hook uses Bun, resolve it in this order: `PEARDROP_BUN`, `BUN`, then `bun` on `PATH`. Never hard-code `/opt/homebrew/bin/bun`, a user home path, or another machine-specific runtime location.
 
 The hook receives:

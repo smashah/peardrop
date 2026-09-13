@@ -157,6 +157,26 @@ message = "Custom error"    # optional — overrides every default validation me
 
 The same spec format is accepted by peardrop.fyi's agent-facing tool for programmatic, agent-driven sessions.
 
+## Built-in storage sinks
+
+`--store` (repeatable, on `receive` and `local`) delivers each received value straight into a sink and then overwrites and removes the plaintext file. Every sink is preflighted before the URL is shared or the local server starts.
+
+| Sink | Options | How the value travels |
+| --- | --- | --- |
+| `keychain` | `service` (default `peardrop.{field}`), `account` (default current user) | stdin to `security -i`, then read back and compared |
+| `passbolt` | `folder`, `name` (default `{field}`), `uri`, `username`, `bin` | on the `passbolt create resource` child's argv for one call (the CLI has no stdin option) |
+| `1password` | `vault` (required), `item` (default `{field}`), `field` (default `credential`), `bin` | a 0600 JSON template passed to `op item create --template` |
+| `env-file` | `path` (required), `key` (default upper-cased field name) | written as a single-quoted line in a 0600 file |
+| `file` | none | keeps the plaintext delivery file instead of removing it |
+
+`{field}` expands to the delivered field name, so a multi-field drop yields one entry per field. Outcomes are reported per sink per field as `stored` events (`receive --json`) or under `stored` in `local --json`'s closing line, and appended without values to `~/.peardrop/ledger.jsonl`.
+
+`peardrop hook test` rehearses the storage side without a tunnel: it preflights each sink, fabricates 0600 delivery files with dummy values, stores them under `-peardrop-test` names, removes them, and with `--run-hook` runs the on_receive hook against the fake files.
+
+```bash
+npx --yes @peardrop/cli@latest hook test --field starling_pat:token --store keychain:service=starling.pat --store env-file:path=./.env
+```
+
 ## Post-receive hooks
 
 A drop can run a command once the payload is confirmed written to disk — for example to load the delivered secret into a Keychain entry and append a ledger row, instead of a caller polling the target path.

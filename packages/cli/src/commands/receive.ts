@@ -13,6 +13,11 @@ import {
   updateSessionStatus,
   resolveTargetLocation,
   runOnReceiveHook,
+  parseSinkSpec,
+  preflightSink,
+  runSinks,
+  SinkError,
+  type SinkSpec,
   type TunnelSession,
 } from "@peardrop/core/node";
 import { DropSpecError, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
@@ -157,6 +162,10 @@ export default class ReceiveCommand extends Command {
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
     ...specFlags,
     "on-receive": Flags.string({ description: "Command to run after a successful drop (overrides [hooks] on_receive)" }),
+    store: Flags.string({
+      multiple: true,
+      description: "Store each received value straight into a sink and remove the plaintext: keychain[:service=…,account=…], passbolt[:folder=…,name=…,uri=…], 1password:vault=…[,item=…], env-file:path=…[,key=…], or file to keep the plaintext. Repeatable; preflighted before the URL is shared",
+    }),
   };
 
   /**
@@ -261,6 +270,23 @@ export default class ReceiveCommand extends Command {
     const onReceiveCommand = flags["on-receive"] ?? spec?.hooks.on_receive;
     if (onReceiveCommand !== undefined && onReceiveCommand.trim().length === 0) {
       return this.fail("--on-receive needs a non-empty command.", flags.json);
+    }
+
+    // Sinks are parsed and preflighted before any tunnel exists: a read-only
+    // vault folder must fail here, not after a human has pasted a live token.
+    let sinks: SinkSpec[] = [];
+    try {
+      sinks = (flags.store ?? []).map(parseSinkSpec);
+    } catch (cause) {
+      return this.fail(cause instanceof SinkError ? cause.message : String(cause), flags.json);
+    }
+    if (!flags.detach) {
+      for (const sink of sinks) {
+        const check = await preflightSink(sink);
+        if (flags.json) await writeStdout(JSON.stringify({ mode: "remote", event: "sink_preflight", sink: sink.kind, ok: check.ok, detail: check.detail, elapsedMs: elapsedMs(), pid: process.pid }));
+        else if (flags.verbose || !check.ok) this.log(`sink preflight ${sink.kind}: ${check.ok ? "ok" : "FAILED"} — ${check.detail}`);
+        if (!check.ok) return this.fail(`Storage sink ${sink.kind} failed preflight: ${check.detail}. No public PearDrop URL was created.`, flags.json);
+      }
     }
 
     const keySeed = randomBytes(32);
@@ -593,6 +619,13 @@ export default class ReceiveCommand extends Command {
                 files: files as ReadonlyArray<{ name: string; path?: string }>,
               });
               if (!flags.json) this.log(`on_receive hook: ${hook.ok ? "ok" : `failed (${hook.error ?? `exit ${hook.exitCode ?? hook.signal}`})`}`);
+            }
+            if (sinks.length > 0) {
+              const stored = await runSinks({ sinks, files: files as ReadonlyArray<{ name: string; path?: string }>, tunnelId: tunnelState.tunnelId });
+              for (const result of stored) {
+                if (flags.json) await writeStdout(JSON.stringify({ mode: "remote", event: "stored", sink: result.sink, field: result.field, ok: result.ok, detail: result.detail, ...(result.id ? { id: result.id } : {}), elapsedMs: elapsedMs(), pid: process.pid }));
+                else this.log(`stored ${result.sink} ${result.field}: ${result.ok ? "ok" : "FAILED"} — ${result.detail}`);
+              }
             }
             if (flags.json) {
               await writeStdout(JSON.stringify({ mode: "remote", event: "delivered", transport: "hyperdht", files, elapsedMs: elapsedMs(), pid: process.pid }));

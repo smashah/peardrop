@@ -83,7 +83,19 @@ A page view, ticket, socket close, attempted send, or sender-side final frame is
 
 ## Store received secrets
 
-Use `[hooks] on_receive` (or `--on-receive`) when receipt must populate a Keychain, vault, or ledger. The hook reads the `0600` delivery files named by `PEARDROP_FILE_PATHS`; PearDrop never passes values on argv or in the environment. The hook must resolve its runtime portably, write each sink and report each result separately, record only metadata in ledgers, delete the plaintext before reporting success, and keep stdout free of secret material. A hook runs after delivery and cannot undo it: treat hook failure as a storage failure, not a transfer failure. Details and a hook contract are in [references/config-and-handoff.md](references/config-and-handoff.md).
+Prefer built-in sinks over a hand-written hook. `--store` (repeatable) puts each received value straight into the sink and removes the plaintext delivery file; every sink is preflighted before the URL is shared, so a read-only vault folder fails now, not after the human has pasted a live token.
+
+```bash
+--store keychain:service=starling.pat,account=me      # macOS Keychain, value via stdin
+--store "passbolt:folder=<folder-id>,name=Starling PAT"  # go-passbolt-cli (value on the child's argv for one call)
+--store 1password:vault=Personal,item=Starling PAT     # op CLI, value via a 0600 template file
+--store env-file:path=./.env,key=STARLING_PAT          # 0600 dotenv line
+--store file                                           # keep the plaintext file as well
+```
+
+`{field}` in a service, name, item, or key expands to the field name; with several fields each gets its own entry. Results arrive as `stored` events (one per sink per field, never with the value) and as value-free rows in `~/.peardrop/ledger.jsonl`. To rehearse without a tunnel: `npx --yes @peardrop/cli@latest hook test --field starling_pat:token --store keychain:service=starling.pat` writes and removes test-suffixed entries and reports each step.
+
+Write an `on_receive` hook (`[hooks] on_receive` or `--on-receive`) only for a destination no sink covers. It reads the `0600` delivery files named by `PEARDROP_FILE_PATHS`; PearDrop never passes values on argv or in the environment. It must report each destination separately, record only metadata, delete plaintext before reporting success, and keep stdout free of secret material. Rehearse it with `hook test --run-hook`. A hook runs after delivery and cannot undo it. Details are in [references/config-and-handoff.md](references/config-and-handoff.md).
 
 ## Send
 

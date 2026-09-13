@@ -1,5 +1,5 @@
 import { Command, Flags } from "@oclif/core";
-import { BridgeServer, DiskSink, resolveTargetLocation } from "@peardrop/core/node";
+import { BridgeServer, DiskSink, resolveTargetLocation, parseSinkSpec, preflightSink, runSinks, SinkError, type SinkResult, type SinkSpec } from "@peardrop/core/node";
 import { runEffect } from "@peardrop/core/node";
 import { DropSpecError, specNeedsDirectoryTarget, type DropSpec } from "@peardrop/core";
 import { loadSpecFromFlags, specFlags } from "../specFlags.js";
@@ -27,6 +27,10 @@ export default class LocalCommand extends Command {
     json: Flags.boolean({ description: "Output JSON result" }),
     ...specFlags,
     "on-receive": Flags.string({ description: "Command to run after a successful drop (overrides [hooks] on_receive)" }),
+    store: Flags.string({
+      multiple: true,
+      description: "Store each received value straight into a sink and remove the plaintext: keychain[:service=…,account=…], passbolt[:folder=…,name=…,uri=…], 1password:vault=…[,item=…], env-file:path=…[,key=…], or file to keep the plaintext. Repeatable; preflighted before the server starts",
+    }),
   };
 
   public async run(): Promise<void> {
@@ -61,6 +65,18 @@ export default class LocalCommand extends Command {
       this.error("--on-receive needs a non-empty command.", { exit: 1 });
     }
 
+    let sinks: SinkSpec[] = [];
+    try {
+      sinks = (flags.store ?? []).map(parseSinkSpec);
+    } catch (cause) {
+      this.error(cause instanceof SinkError ? cause.message : String(cause), { exit: 1 });
+    }
+    for (const sinkSpec of sinks) {
+      const check = await preflightSink(sinkSpec);
+      if (!check.ok) this.error(`Storage sink ${sinkSpec.kind} failed preflight: ${check.detail}. No drop page was started.`, { exit: 1 });
+    }
+    const stored: SinkResult[] = [];
+
     const host = flags.lan ? "0.0.0.0" : "127.0.0.1";
     const sink = new DiskSink(flags.target);
 
@@ -73,6 +89,9 @@ export default class LocalCommand extends Command {
       spec,
       onReceive: onReceiveCommand
         ? { command: onReceiveCommand, targetPath: resolveTargetLocation(flags.target).basePath }
+        : undefined,
+      afterReceive: sinks.length > 0
+        ? async (files) => { stored.push(...await runSinks({ sinks, files, tunnelId: slug })); }
         : undefined,
     });
 
@@ -129,11 +148,13 @@ export default class LocalCommand extends Command {
         target: flags.target,
         pid: process.pid,
         ...(hook ? { hook: { ok: hook.ok, exitCode: hook.exitCode, signal: hook.signal, error: hook.error } } : {}),
+        ...(stored.length > 0 ? { stored: stored.map((r) => ({ sink: r.sink, field: r.field, ok: r.ok, detail: r.detail, ...(r.id ? { id: r.id } : {}) })) } : {}),
         ...(outstandingFields && outstandingFields.length > 0 ? { outstandingFields } : {}),
       }));
     } else {
       await writeStdout(` Session closed: ${status}`);
       if (hook) await writeStdout(` on_receive hook: ${hook.ok ? "ok" : `failed (${hook.error ?? `exit ${hook.exitCode ?? hook.signal}`})`}`);
+      for (const r of stored) await writeStdout(` stored ${r.sink} ${r.field}: ${r.ok ? "ok" : "FAILED"} — ${r.detail}`);
       if (outstandingFields && outstandingFields.length > 0) {
         await writeStdout(` Fields not sent (optional, left blank): ${outstandingFields.join(", ")}`);
       }
