@@ -1,6 +1,6 @@
 # PearDrop CLI
 
-PearDrop creates short-lived file and secret drops. Direct CLI transfers are end-to-end encrypted over HyperDHT Noise connections; Relay transfers report whether they used non-custodial forwarding or custodial fallback.
+PearDrop creates short-lived file and secret drops. Direct CLI transfers are end-to-end encrypted over HyperDHT Noise connections. Current Relay sends require non-custodial forwarding and fail instead of downgrading to custodial mode; CLI 1.7.1 and earlier may still downgrade.
 
 ```bash
 npx --yes @peardrop/cli@latest receive --target ./inbox
@@ -22,7 +22,7 @@ npx --yes @peardrop/cli@latest send silent-moss-7f2 --relay --text "text to send
 npx --yes @peardrop/cli@latest send silent-moss-7f2 --relay ./file.zip
 ```
 
-The forced Relay sender uses the same state machine as the hosted web sender: non-custodial WebSocket-to-HyperDHT first, with custodial forwarding only as a fallback. Add `--verbose` for elapsed phase diagnostics on stderr or `--json` for structured lifecycle events on stdout.
+The forced Relay sender uses the same state machine as the hosted web sender: non-custodial WebSocket-to-HyperDHT with custodial fallback disabled. It displays this policy before connecting and reports the result mode. Connection failure stops the transfer. Add `--verbose` for elapsed phase diagnostics on stderr or `--json` for structured lifecycle events on stdout.
 
 `npx --yes @peardrop/cli@latest test nc` is the production non-custodial diagnostic. It invokes the exact shared web-sender boundary (`sendRelay` from `@peardrop/core/relay`) that the hosted browser drop page, forced `send --relay`, and the relay e2e harness all use — not a CLI subprocess approximation of it. It creates a disposable receiver, forces non-custodial Relay with custodial fallback disabled, verifies byte-for-byte delivery and clean receiver exit, confirms the tunnel was consumed, and deletes its temporary data. After any failure, timeout, SIGINT, or SIGTERM, it awaits bounded sender teardown and then watches the receiver for a documented 2-second terminal-consistency window: if the receiver delivers bytes the sender can no longer see — the invisible-live-attempt-after-failure condition — the diagnostic turns red at `late-delivery` rather than reporting success from eventual byte delivery. Events are labeled `receiver`, `web-sender`, `relay`, or `harness`. Its default timeout is 30 seconds; override it with a bounded duration such as `--timeout 1m`, and add `--json` for stable machine-readable events and the final summary.
 

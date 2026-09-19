@@ -34,7 +34,7 @@ export default class SendCommand extends Command {
     relay: Flags.boolean({ description: "Force the production WebSocket Relay transport" }),
     verbose: Flags.boolean({ char: "v", description: "Write phase diagnostics to stderr" }),
     json: Flags.boolean({ description: "Write structured lifecycle events to stdout" }),
-    "non-custodial-only": Flags.boolean({ hidden: true, description: "Disable custodial Relay fallback" }),
+    "non-custodial-only": Flags.boolean({ hidden: true, description: "Compatibility flag: Relay is always non-custodial" }),
     "relay-timeout-ms": Flags.integer({ hidden: true, default: 30_000 }),
     "worker-url": Flags.string({ description: "Worker API URL", default: "https://peardrop.fyi" }),
   };
@@ -137,6 +137,7 @@ export default class SendCommand extends Command {
     }
 
     if (flags.relay) {
+      if (!flags.json) this.log("Relay mode: non-custodial (end-to-end encrypted). Custodial fallback disabled.");
       const relayFile: RelayFile = flags.text
         ? {
             name: "pasted-secret.txt",
@@ -158,7 +159,7 @@ export default class SendCommand extends Command {
           files: [relayFile],
           workerUrl,
           pin: flags.pin,
-          fallback: flags["non-custodial-only"] ? "none" : "custodial",
+          fallback: "none",
           acceptTimeoutMs: flags["relay-timeout-ms"],
           onEvent: (event) => {
             const adjusted = { ...event, elapsedMs: descriptorMs + event.elapsedMs, pid: process.pid, transport: "relay" as const };
@@ -180,7 +181,7 @@ export default class SendCommand extends Command {
           : { event: "error", transport: "relay", phase: "unknown", error: cause instanceof Error ? cause.message : String(cause), elapsedMs: Math.round(performance.now() - startedAt), pid: process.pid };
         if (flags.json) writeJson(failure);
         writeVerbose("relay", { ...failure, status: "failed" });
-        this.error(`Relay send failed at ${failure.phase}: ${failure.error}`);
+        this.error(`Relay send failed at ${failure.phase}: ${failure.error}. Custodial fallback is disabled; no downgrade was attempted.`);
       }
     }
     const command = this;

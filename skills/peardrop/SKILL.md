@@ -106,7 +106,7 @@ npx --yes @peardrop/cli@latest <slug> "text to send"
 npx --yes @peardrop/cli@latest send <slug> ./file.zip
 ```
 
-Report the transport the CLI actually selected. Direct HyperDHT and non-custodial Relay keep payloads opaque to PearDrop; `custodial-fallback` can inspect bytes in transit even though it stores nothing, so never describe every Relay transfer as end-to-end encrypted.
+Report the transport the CLI actually selected. Current CLI and hosted browser senders require non-custodial Relay and stop instead of downgrading. CLI 1.7.1 and earlier can still enable `custodial-fallback`, which gives the relay access to payload bytes. Direct HyperDHT and non-custodial Relay keep payloads opaque to PearDrop; never describe an old or explicitly custodial transfer as end-to-end encrypted. If the encrypted path fails, report the failure and offer a retry or direct transfer; do not enable custodial forwarding to make delivery succeed.
 
 ## Never
 

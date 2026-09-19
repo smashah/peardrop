@@ -19,7 +19,7 @@ Only authenticated receiver acknowledgement establishes delivery, completion, an
 After a sender failure, timeout, signal, or fallback decision:
 
 1. Cancel the active attempt and await its file-reader, peer, DHT, and WebSocket teardown.
-2. Start fallback only after attempt-one teardown completes.
+2. Current CLI and browser sends stop here. Only an explicit core compatibility caller may request custodial fallback, after attempt-one teardown completes.
 3. Watch the receiver for the documented two-second terminal-consistency window.
 4. Turn the diagnostic red if the abandoned attempt delivers late.
 5. Cancel the disposable tunnel and verify the public page/ticket is unusable on every outcome.
@@ -28,7 +28,7 @@ Test concurrent late usage/accounting writes against consumption. A stale final 
 
 ## Detect no progress instead of waiting blindly
 
-The browser-preferred non-custodial attempt uses a five-second no-progress watchdog reset only by real Relay protocol frames. Real progress extends the attempt. Silence or a deterministic pre-ACCEPT connection failure triggers fallback after complete teardown. Receiver rejection and failures after receiver ACCEPT remain terminal; do not silently weaken security by falling back on every error.
+The non-custodial attempt uses a five-second no-progress watchdog reset only by real Relay protocol frames. Real progress extends the attempt. Silence or a deterministic pre-ACCEPT connection failure ends current browser and CLI sends after teardown. Core defaults to no fallback; its retained compatibility path requires explicit `fallback: "custodial"`. Receiver rejection and failures after receiver ACCEPT remain terminal even for that compatibility path.
 
 Report the actual mode:
 
