@@ -41,13 +41,13 @@ npx --yes @peardrop/cli@latest send <slug> ./file.zip
 npx --yes @peardrop/cli@latest test nc
 ```
 
-Normal CLI sends use direct HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path. Add `--relay` to `send` when you need to force the same WebSocket-to-HyperDHT Relay transport used by the hosted sender; it tries non-custodial Relay first and falls back to custodial forwarding only when required. Pass `--no-relay` to `receive` when you explicitly want a direct-only session.
+Normal CLI sends use direct HyperDHT Noise connections and keep PearDrop infrastructure out of the payload path. Add `--relay` to `send` when you need to force the same WebSocket-to-HyperDHT Relay transport used by the hosted sender. Current senders require non-custodial Relay and stop with an error if it fails; they do not retry custodially. Pass `--no-relay` to `receive` when you explicitly want a direct-only session.
 
 `test nc` runs a disposable, non-custodial-only production Relay transfer without a browser. It invokes the exact shared web-sender boundary (`sendRelay`) that the hosted browser sender and `send --relay` use — not a CLI subprocess approximation. It verifies the received bytes and hash, receiver shutdown, tunnel consumption, and **terminal consistency**: after any failure, timeout, or signal, it awaits bounded sender teardown and watches the receiver for a 2-second window so no invisible live attempt can deliver after the terminal result. Use `--json` for structured lifecycle output labeled `receiver`/`web-sender`/`relay`/`harness`, or `--timeout 1m` to override the bounded 30-second default.
 
 ## Relay
 
-In non-custodial mode the relay forwards opaque handshake and payload bytes without receiving the sender's session key. When a normal sender cannot reach the receiver through that path, it can retry in custodial fallback mode; that mode terminates sender-side encryption at the relay and can inspect bytes in transit, but stores no payload. The selected mode is reported for every transfer. Relay admission requires signed tickets and can report byte usage to a compatible control plane; `test nc` disables fallback so it specifically proves or falsifies the non-custodial path.
+In non-custodial mode the relay forwards opaque handshake and payload bytes without receiving the sender's session key. Automatic custodial fallback is disabled in current CLI and hosted browser senders. The core library retains explicitly requested custodial forwarding for compatibility; that mode gives the relay access to payload bytes. CLI 1.7.1 and earlier may still opt into that fallback. The selected mode is reported for every transfer. Relay admission requires signed tickets and can report byte usage to a compatible control plane; `test nc` specifically proves or falsifies the non-custodial path.
 
 ```bash
 docker build -f infra/relay/Dockerfile -t peardrop-relay .

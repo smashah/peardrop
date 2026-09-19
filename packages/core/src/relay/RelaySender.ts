@@ -655,7 +655,8 @@ export const sendRelay = (request: RelaySendRequest, adapters: RelaySenderAdapte
     const first = yield* Effect.exit(attemptTransfer(request, adapters, firstContext, false));
     if (Exit.isSuccess(first)) return first.value;
     const found = Exit.findError(first);
-    if (found._tag !== "Success" || request.fallback === "none") return yield* first;
+    // Custodial support is retained, but never selected implicitly.
+    if (found._tag !== "Success" || request.fallback !== "custodial") return yield* first;
     const fallbackReason: RelayFallbackReason | undefined = found.success.phase === "accept"
       && found.success.message === ACCEPT_TIMEOUT_MESSAGE
       ? "accept-timeout"

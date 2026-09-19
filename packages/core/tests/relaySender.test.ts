@@ -267,6 +267,7 @@ describe("shared Relay sender", () => {
     const result = await Effect.runPromise(Effect.scoped(sendRelay({
       descriptor,
       files: [file],
+      fallback: "custodial",
       acceptTimeoutMs: 5,
       acceptPollMs: 1,
       onEvent: (event) => events.push(event),
@@ -284,6 +285,7 @@ describe("shared Relay sender", () => {
     const result = await Effect.runPromise(Effect.scoped(sendRelay({
       descriptor,
       files: [file],
+      fallback: "custodial",
       acceptTimeoutMs: 1_000,
       acceptPollMs: 500,
       onEvent: (event) => {
@@ -334,6 +336,7 @@ describe("shared Relay sender", () => {
     const result = await Effect.runPromise(Effect.scoped(sendRelay({
       descriptor,
       files: [file],
+      fallback: "custodial",
       acceptTimeoutMs: 1_000,
       acceptPollMs: 500,
       onEvent: (event) => events.push(event),
@@ -382,6 +385,7 @@ describe("shared Relay sender", () => {
     const send = Effect.runPromise(Effect.scoped(sendRelay({
       descriptor,
       files: [gatedHashFile],
+      fallback: "custodial",
       acceptTimeoutMs: 1_000,
       onEvent: (event) => {
         events.push(event);
@@ -427,6 +431,7 @@ describe("shared Relay sender", () => {
     const result = await Effect.runPromise(Effect.scoped(sendRelay({
       descriptor,
       files: [file],
+      fallback: "custodial",
       acceptTimeoutMs: 1_000,
       onEvent: (event) => {
         events.push(event);
@@ -444,17 +449,19 @@ describe("shared Relay sender", () => {
     expectFirstAttemptTornDownBeforeFallback();
   });
 
-  it("fails at ACCEPT without custodial fallback when non-custodial-only is required", async () => {
+  it.each([undefined, "none"] as const)("fails at ACCEPT without custodial fallback with policy %s", async (fallback) => {
     rejectNonCustodial = true;
     const exit = await Effect.runPromiseExit(Effect.scoped(sendRelay({
       descriptor,
       files: [file],
-      fallback: "none",
+      fallback,
       acceptTimeoutMs: 5,
       acceptPollMs: 1,
     }, adapters)));
 
     expect(custodialModes).toEqual([false]);
+    expect(sockets).toHaveLength(1);
+    expect(writes.some(({ frame }) => frame[4] === 4)).toBe(false);
     expect(exit._tag).toBe("Failure");
     expect(String(exit)).toContain("ACCEPT");
     expect(String(exit)).toContain(RelaySenderError.name);
@@ -539,6 +546,7 @@ describe("shared Relay sender", () => {
       const request = {
         descriptor,
         files: [file],
+        fallback: "custodial" as const,
         acceptTimeoutMs: 30_000,
         onEvent: (event: { phase: string; status: string; reason?: string; attempt: number }) => {
           events.push(event);
