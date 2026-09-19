@@ -26,6 +26,17 @@
 
 
 
+
+## 1.7.2
+<sub>2026-09-19</sub>
+
+- [`08e2741`](https://github.com/smashah/peardrop/commit/08e2741c23e863c620e6af25166a4c7ab809e135)  *(patch)*
+  Sessions prune themselves, so `~/.peardrop/tunnels` stops growing without bound ([#106](https://github.com/smashah/peardrop/issues/106)). A receiver killed uncleanly — SIGKILL, machine sleep, a closed terminal — never got to write a terminal status, leaving its file at "waiting" forever with nothing to sweep it; `receive`, `local`, `status`, and `wait` now run core's new `pruneStaleSessions` first, which deletes expired "waiting" sessions whose receiver is no longer running and finished sessions older than a week, and never touches a session whose pid is alive. The sweep is silent in `--json` mode (one stderr line under `--verbose`) and a failure never blocks a drop. A receiver that ends without delivering records `cancelled` or the new `failed` status instead of leaving the file at "waiting", and `doctor --prune` now delegates to the same function.
+- [#122](https://github.com/smashah/peardrop/pull/122) [`3d2dc8d`](https://github.com/smashah/peardrop/commit/3d2dc8d1661b4fc8c4268502a504010f838231cc)  *(patch)*
+  A received value's plaintext file is now kept (and reported as a failed `file` result) whenever any `--store` sink failed, instead of being shredded as the only copy of a just-pasted secret. `receive --detach` gives the background receiver enough time for its sink preflights before declaring a readiness timeout (30 s per sink on top of the Worker budget).
+- [#122](https://github.com/smashah/peardrop/pull/122) [`5310730`](https://github.com/smashah/peardrop/commit/53107302583e62cfb83d63b65ca378c40ca57124)  *(patch)*
+  Relay sends now fail instead of automatically downgrading to custodial mode. The CLI shows its non-custodial mode before sending and explains that fallback was disabled on failure. The core sender defaults to no fallback while retaining explicitly requested custodial support for compatibility.
+
 ## 1.7.1
 <sub>2026-09-13</sub>
 
